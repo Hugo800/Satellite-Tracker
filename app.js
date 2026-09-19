@@ -24,11 +24,11 @@
    ═══════════════════════════════════════════════════════════════ */
 const CONFIG = {
   TLE_GROUPS: [
-    { name: 'stations',  label: 'Raumstationen',  url: 'https://celestrak.org/SATCAT/query.php?GROUP=stations&FORMAT=tle',                         tag: 'iss'      },
-    { name: 'hubble',    label: 'Hubble',          url: 'https://celestrak.org/SATCAT/query.php?CATNR=20580&FORMAT=tle',                             tag: 'special'  },
-    { name: 'noaa',      label: 'NOAA',            url: 'https://celestrak.org/SATCAT/query.php?GROUP=noaa&FORMAT=tle',                              tag: 'weather'  },
-    { name: 'starlink',  label: 'Starlink',        url: 'https://celestrak.org/SATCAT/query.php?GROUP=starlink&FORMAT=tle',                         tag: 'starlink' },
-    { name: 'weather',   label: 'Wettersats.',     url: 'https://celestrak.org/SATCAT/query.php?GROUP=weather&FORMAT=tle',                          tag: 'weather'  },
+    { name: 'stations',  label: 'Raumstationen',  url: 'https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle', tag: 'iss'      },
+    { name: 'hubble',    label: 'Hubble',          url: 'https://celestrak.org/NORAD/elements/gp.php?CATNR=20580&FORMAT=tle',    tag: 'special'  },
+    { name: 'noaa',      label: 'NOAA',            url: 'https://celestrak.org/NORAD/elements/gp.php?GROUP=noaa&FORMAT=tle',     tag: 'weather'  },
+    { name: 'starlink',  label: 'Starlink',        url: 'https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=tle', tag: 'starlink' },
+    { name: 'weather',   label: 'Wettersats.',     url: 'https://celestrak.org/NORAD/elements/gp.php?GROUP=weather&FORMAT=tle',  tag: 'weather'  },
   ],
   // Fallback hard-coded TLEs (always shown even without network)
   FALLBACK_TLES: [
@@ -79,8 +79,8 @@ const CONFIG = {
    STATE
    ═══════════════════════════════════════════════════════════════ */
 const State = {
-  // Observer position
-  observer: { lat: 48.1, lon: 11.6, alt: 0, valid: false },
+  // Observer position (default: Frankfurt/Central Europe until GPS connects)
+  observer: { lat: 50.1109, lon: 8.6821, alt: 0.1, valid: true, isDefault: true },
 
   // Satellites array: { name, satrec, tag, positions:[], computed:{az,el,range,alt,vel,visible} }
   satellites: [],
@@ -128,7 +128,7 @@ const State = {
 const Utils = {
   DEG: Math.PI / 180,
 
-  /** Convert az/el (degrees) to canvas x/y in stereographic projection */
+  /** Convert az/el (degrees) to canvas x/y in gnomonic projection */
   azElToXY(az, el, viewAz, viewEl, fov, W, H) {
     // Angular distance from view center
     const azR  = az  * this.DEG;
@@ -152,16 +152,25 @@ const Utils = {
     // Gnomonic projection
     const scale = (Math.min(W, H) / 2) / Math.tan((fov / 2) * this.DEG);
 
-    // Construct an orthogonal basis around view direction
-    // Right vector: perpendicular to view in horizontal plane
-    const rightX = Math.cos(vaR);
-    const rightY = -Math.sin(vaR);
-    const rightZ = 0;
+    let rightX, rightY, rightZ;
+    let upX, upY, upZ;
 
-    // Up vector: perpendicular to view and right
-    const upX = -Math.sin(veR) * Math.sin(vaR);
-    const upY = -Math.sin(veR) * Math.cos(vaR);
-    const upZ =  Math.cos(veR);
+    if (viewEl > 88) {
+      // Near zenith: top of screen points towards viewAz (North if viewAz=0)
+      upX = Math.sin(vaR);
+      upY = Math.cos(vaR);
+      upZ = 0;
+      rightX = Math.cos(vaR);
+      rightY = -Math.sin(vaR);
+      rightZ = 0;
+    } else {
+      rightX = Math.cos(vaR);
+      rightY = -Math.sin(vaR);
+      rightZ = 0;
+      upX = -Math.sin(veR) * Math.sin(vaR);
+      upY = -Math.sin(veR) * Math.cos(vaR);
+      upZ =  Math.cos(veR);
+    }
 
     const px = (x0*rightX + y0*rightY + z0*rightZ) / dot;
     const py = (x0*upX    + y0*upY    + z0*upZ)    / dot;
@@ -210,13 +219,14 @@ const GeoModule = {
 
   start() {
     if (!navigator.geolocation) {
-      UIModule.showPermStatus('Geolocation nicht unterstützt', true);
+      UIModule.showPermStatus('Geolocation wird im Browser nicht unterstützt', true);
       return;
     }
+    UIModule.showPermStatus('GPS-Standort wird abgefragt…');
     this.watchId = navigator.geolocation.watchPosition(
       pos => this._onPosition(pos),
       err => this._onError(err),
-      { enableHighAccuracy: true, maximumAge: 10000, timeout: 30000 }
+      { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
     );
   },
 
@@ -226,20 +236,18 @@ const GeoModule = {
       lon:   pos.coords.longitude,
       alt:   (pos.coords.altitude || 0) / 1000,  // km
       valid: true,
+      isDefault: false,
     };
     UIModule.updateGeoChip(true);
-    // Hide overlay if we had GPS
-    const overlay = document.getElementById('permOverlay');
-    if (overlay && !overlay.classList.contains('hidden')) {
-      overlay.classList.add('hidden');
-      setTimeout(() => overlay.style.display = 'none', 400);
-    }
+    UIModule.showPermStatus('Standort aktiv ✓');
+    PropagationModule.update();
+    setTimeout(() => UIModule.dismissOverlay(), 600);
   },
 
   _onError(err) {
     console.warn('Geo error:', err.message);
-    UIModule.updateGeoChip(false);
-    UIModule.showPermStatus('GPS-Fehler: ' + err.message, true);
+    UIModule.showPermStatus('GPS nicht verfügbar – Standardort aktiv', false);
+    UIModule.updateGeoChip(true);
   },
 };
 
@@ -342,6 +350,7 @@ const TLEModule = {
     }
     console.log(`Loaded ${State.satellites.length} satellites`);
     State.filteredSats = [...State.satellites];
+    PropagationModule.update();
     UIModule.renderSatList();
     UIModule.updateSatChip();
   },
@@ -1093,13 +1102,20 @@ const UIModule = {
       OrientationModule.requestPermission();
     });
     document.getElementById('btnSkipPerm').addEventListener('click', () => {
-      const overlay = document.getElementById('permOverlay');
-      overlay.classList.add('hidden');
-      setTimeout(() => overlay.style.display = 'none', 400);
-      // Use a default location (Munich) as fallback
-      State.observer = { lat: 48.137, lon: 11.576, alt: 0, valid: true };
-      this.updateGeoChip(true);
-      document.getElementById('geoLabel').textContent = 'Demo-Modus';
+      this.dismissOverlay();
+    });
+    const btnClose = document.getElementById('btnCloseOverlay');
+    if (btnClose) {
+      btnClose.addEventListener('click', () => this.dismissOverlay());
+    }
+    const overlay = document.getElementById('permOverlay');
+    if (overlay) {
+      overlay.addEventListener('click', e => {
+        if (e.target === overlay) this.dismissOverlay();
+      });
+    }
+    window.addEventListener('keydown', e => {
+      if (e.key === 'Escape') this.dismissOverlay();
     });
 
     // Search
@@ -1165,6 +1181,14 @@ const UIModule = {
     const el = document.getElementById('permStatus');
     el.textContent = msg;
     el.className = 'perm-status' + (isError ? ' error' : '');
+  },
+
+  dismissOverlay() {
+    const overlay = document.getElementById('permOverlay');
+    if (overlay && !overlay.classList.contains('hidden')) {
+      overlay.classList.add('hidden');
+      setTimeout(() => overlay.style.display = 'none', 400);
+    }
   },
 
   toggleNightMode() {
@@ -1364,3 +1388,4 @@ if (document.readyState === 'loading') {
 } else {
   App.init();
 }
+

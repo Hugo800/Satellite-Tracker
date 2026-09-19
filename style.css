@@ -459,6 +459,7 @@ html, body {
 .overlay.hidden { opacity: 0; pointer-events: none; }
 
 .overlay__card {
+  position: relative;
   width: 100%;
   max-width: 380px;
   background: var(--surface);
@@ -468,6 +469,25 @@ html, body {
   text-align: center;
   box-shadow: 0 0 60px rgba(0,230,255,0.08), 0 20px 60px rgba(0,0,0,0.6);
   animation: cardIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.overlay__close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 8px;
+  transition: var(--transition);
+  border-radius: var(--radius-sm);
+}
+.overlay__close:hover {
+  color: var(--cyan);
+  background: var(--cyan-glow);
 }
 
 @keyframes cardIn {
@@ -632,3 +652,4 @@ html, body {
   #lookHud { bottom: max(16px, calc(env(safe-area-inset-bottom) + 8px)); }
   #radarContainer { bottom: max(72px, calc(env(safe-area-inset-bottom) + 62px)); }
 }
+

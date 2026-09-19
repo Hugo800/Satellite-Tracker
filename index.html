@@ -151,6 +151,7 @@
   ═══════════════════════════════════════════════════════════ -->
   <div id="permOverlay" class="overlay" role="dialog" aria-modal="true" aria-label="Berechtigungen">
     <div class="overlay__card">
+      <button id="btnCloseOverlay" class="overlay__close" aria-label="Schließen">&times;</button>
       <div class="overlay__icon">🛰</div>
       <h1 class="overlay__title">SatTracker</h1>
       <p class="overlay__subtitle">Interaktiver Echtzeit-Sternenatlas</p>
@@ -181,9 +182,13 @@
   <!-- ═══════════════════════════════════════════════════════════
        SCRIPTS
   ═══════════════════════════════════════════════════════════ -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/satellite.js/4.1.3/satellite.min.js"
-          integrity="sha512-L3pFe12W6MKuwpzPBJFwSFXQq3cEWfn7LQjKB+zF8jS4AGXQ2WIQEBwGCdSfQqOH8T+9ZGDrPNIr5c5VV8tg=="
-          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="satellite.min.js"></script>
+  <script>
+    if (typeof satellite === 'undefined') {
+      document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/satellite.js/4.1.3/satellite.min.js"><\\/script>');
+    }
+  </script>
   <script src="app.js" defer></script>
 </body>
 </html>
+

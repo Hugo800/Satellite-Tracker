@@ -10,6 +10,7 @@ const SHELL_ASSETS  = [
   './index.html',
   './style.css',
   './app.js',
+  './satellite.min.js',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -100,3 +101,4 @@ async function staleWhileRevalidate(request, cacheName) {
   }).catch(() => null);
   return cached || fetchPromise;
 }
+
