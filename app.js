@@ -64,7 +64,7 @@ const CONFIG = {
       l2: '2 27386  98.5483 319.0000 0001000 100.0000 260.0000 14.37805000000000' },
   ],
   UPDATE_INTERVAL_MS:  1000,       // propagation update rate
-  TLE_CACHE_KEY:       'sattracker_tle_cache',
+  TLE_CACHE_KEY:       'sattracker_tle_cache_v2',
   TLE_CACHE_TTL_MS:    4 * 60 * 60 * 1000,  // 4 hours
   TRAIL_POINTS:        40,          // orbit trail history
   TRAIL_STEP_MS:       15000,       // 15 s between trail points
@@ -315,22 +315,30 @@ const TLEModule = {
 
   _buildSatellites(rawArray) {
     State.satellites = [];
-    let count = 0;
+    const counts = {};
+
     for (const raw of rawArray) {
       try {
+        const tag = raw.tag || 'other';
+        counts[tag] = (counts[tag] || 0) + 1;
+
+        // CRITICAL PERFORMANCE FIX: Starlink has >6000 satellites.
+        // Rendering/propagating all of them drops FPS to zero on mobile.
+        if (tag === 'starlink' && counts[tag] > 200) continue;
+        if (counts[tag] > 400) continue; // Safety limit for other huge groups
+
         const satrec = satellite.twoline2satrec(raw.l1, raw.l2);
         if (satrec.error !== 0) continue;
         const noradId = raw.l2.split(' ')[1];
         State.satellites.push({
           name:     raw.name,
           satrec,
-          tag:      raw.tag || 'other',
+          tag,
           noradId,
           l1:       raw.l1,
           l2:       raw.l2,
           computed: { az: 0, el: -90, range: 0, alt: 0, vel: 0, visible: false },
         });
-        count++;
       } catch(e) { /* skip invalid */ }
     }
     // Also inject fallbacks if they aren't already present
@@ -339,8 +347,15 @@ const TLEModule = {
         try {
           const satrec = satellite.twoline2satrec(fb.l1, fb.l2);
           if (satrec.error !== 0) continue;
+          
+          let fbTag = 'other';
+          const n = fb.name.toLowerCase();
+          if (n.includes('starlink')) fbTag = 'starlink';
+          else if (n.includes('iss') || n.includes('zarya')) fbTag = 'iss';
+          else if (n.includes('noaa') || n.includes('terra')) fbTag = 'weather';
+
           State.satellites.push({
-            name: fb.name, satrec, tag: 'fallback',
+            name: fb.name, satrec, tag: fbTag,
             noradId: fb.l2.split(' ')[1],
             l1: fb.l1, l2: fb.l2,
             computed: { az: 0, el: -90, range: 0, alt: 0, vel: 0, visible: false },
@@ -417,44 +432,27 @@ const OrientationModule = {
   _onOrientation(e) {
     if (!State.gyroEnabled) return;
 
-    const DEG = Math.PI / 180;
     let alpha = e.alpha || 0;
-    const beta  = (e.beta  || 0);
-    const gamma = (e.gamma || 0);
+    let beta  = e.beta  || 0; // -180 to 180
 
-    // iOS provides webkitCompassHeading (0-360, North=0, clockwise)
-    // which is more reliable than alpha on iOS devices
+    // iOS compass heading (0 = North, 90 = East)
     if (e.webkitCompassHeading !== undefined && e.webkitCompassHeading !== null) {
       alpha = e.webkitCompassHeading;
     }
 
-    // --- Compute look direction using rotation matrix ---
-    // Device orientation: R = Rz(α) · Rx(β) · Ry(γ)
-    // Screen normal (+z_device) in Earth frame (x=East, y=North, z=Up):
-    const aR = alpha * DEG;
-    const bR = beta  * DEG;
-    const gR = gamma * DEG;
+    // SIMPLIFIED, ROBUST ELEVATION MAPPING:
+    // When phone is held vertical (pointing at horizon): beta is approx 90
+    // When phone is held flat (screen up, pointing at zenith): beta is approx 0
+    // If the user tilts phone backward beyond flat: beta goes negative
+    
+    // The elevation angle of the sky we want to look at:
+    // beta = 90  => elevation = 0 (horizon)
+    // beta = 0   => elevation = 90 (zenith)
+    const rawElevation = 90 - beta;
+    const elevation = Math.max(0, Math.min(90, rawElevation));
 
-    const sa = Math.sin(aR), ca = Math.cos(aR);
-    const sb = Math.sin(bR), cb = Math.cos(bR);
-    const sg = Math.sin(gR), cg = Math.cos(gR);
-
-    // +z_device (screen normal) transformed to Earth frame
-    const east  =  sg * ca + cg * sb * sa;
-    const north =  sg * sa - cg * sb * ca;
-    const up    =  cg * cb;
-
-    // Elevation = how far up the screen points
-    const elevation = Math.asin(Math.max(-1, Math.min(1, up))) / DEG;
-
-    // Azimuth = compass direction the screen points toward
-    // Since the screen faces the USER, the direction the user looks
-    // through the phone is opposite: +180°
-    let azimuth = Math.atan2(east, north) / DEG;
-    azimuth = (azimuth + 180 + 360) % 360;
-
-    State.gyroAz = azimuth;
-    State.gyroEl = Math.max(-5, Math.min(90, elevation));
+    State.gyroAz = alpha;
+    State.gyroEl = elevation;
   },
 };
 
