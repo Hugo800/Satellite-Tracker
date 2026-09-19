@@ -3,8 +3,8 @@
  * Cache-first for app shell, network-first for TLE data.
  */
 
-const CACHE_NAME    = 'sattracker-v5';
-const TLE_CACHE     = 'sattracker-tle-v5';
+const CACHE_NAME    = 'sattracker-v6';
+const TLE_CACHE     = 'sattracker-tle-v6';
 const SHELL_ASSETS  = [
   './',
   './index.html',
@@ -18,7 +18,10 @@ const SHELL_ASSETS  = [
 ];
 
 // Celestrak TLE endpoints
-const TLE_ORIGIN = 'https://celestrak.org';
+const TLE_ORIGINS = [
+  'celestrak.org',
+  'celestrak.com',
+];
 
 self.addEventListener('install', event => {
   self.skipWaiting();

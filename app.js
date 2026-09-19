@@ -1616,12 +1616,7 @@ const App = {
   },
 };
 
-/* ── Bootstrap ─────────────────────────────────────────────── */
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => App.init());
-} else {
-  App.init();
-}
+
 
 const MapRenderer = {
   canvas: null, ctx: null, geoData: null,
@@ -1720,3 +1715,11 @@ const MapRenderer = {
     }
   }
 };
+
+
+/* ── Bootstrap ─────────────────────────────────────────────── */
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => App.init());
+} else {
+  App.init();
+}
