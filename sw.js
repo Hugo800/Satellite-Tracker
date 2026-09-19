@@ -12,6 +12,7 @@ const SHELL_ASSETS  = [
   './app.js',
   './satellite.min.js',
   './manifest.json',
+  './map.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
 ];
