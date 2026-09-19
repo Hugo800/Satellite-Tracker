@@ -850,11 +850,14 @@ const SkyRenderer = {
     this._drawCardinals(ctx, W, H, viewAz, viewEl);
 
     // ── Satellite trails ─────────────────────────────────────
-    for (const sat of State.satellites) {
-      if (!sat.computed.visible) continue;
-      const trail = State.trails[sat.name];
-      if (!trail || trail.length < 2) continue;
-      this._drawTrail(ctx, trail, sat, viewAz, viewEl, W, H);
+    if (State.selectedSat) {
+      const sat = State.selectedSat;
+      if (sat.computed.visible) {
+        const trail = State.trails[sat.name];
+        if (trail && trail.length >= 2) {
+          this._drawTrail(ctx, trail, sat, viewAz, viewEl, W, H);
+        }
+      }
     }
 
     // ── Satellites ───────────────────────────────────────────
@@ -1434,6 +1437,7 @@ const UIModule = {
     if (q) sats = sats.filter(s => s.name.toLowerCase().includes(q));
     if (State.activeFilter !== 'all') {
       if (State.activeFilter === 'visible') sats = sats.filter(s => s.computed.visible);
+      else if (State.activeFilter === 'nostarlink') sats = sats.filter(s => s.tag !== 'starlink');
       else sats = sats.filter(s => s.tag === State.activeFilter);
     }
     State.filteredSats = sats;
