@@ -71,7 +71,7 @@ const CONFIG = {
   FOV_DEFAULT:         90,          // degrees
   FOV_MIN:             15,
   FOV_MAX:             150,
-  STAR_COUNT:          400,
+  STAR_COUNT:          800,
   VISIBLE_EL_MIN:      0,           // elevation threshold in degrees
 };
 
@@ -417,19 +417,44 @@ const OrientationModule = {
   _onOrientation(e) {
     if (!State.gyroEnabled) return;
 
-    // Alpha = compass heading (0 = North, clockwise)
-    // Beta  = front/back tilt (-90 to 90)
-    // Gamma = left/right tilt (-90 to 90)
-    let alpha = e.alpha || 0;   // compass (yaw)
-    let beta  = e.beta  || 0;   // tilt (pitch)
+    const DEG = Math.PI / 180;
+    let alpha = e.alpha || 0;
+    const beta  = (e.beta  || 0);
+    const gamma = (e.gamma || 0);
 
-    // When phone is held flat facing sky:
-    //   beta ~= -90 (face up) → elevation ~90
-    //   beta ~= 0  (vertical) → elevation ~0
-    const elevation = Math.max(0, Math.min(90, -(beta + 90) + 90));
+    // iOS provides webkitCompassHeading (0-360, North=0, clockwise)
+    // which is more reliable than alpha on iOS devices
+    if (e.webkitCompassHeading !== undefined && e.webkitCompassHeading !== null) {
+      alpha = e.webkitCompassHeading;
+    }
 
-    State.gyroAz = alpha;
-    State.gyroEl = elevation;
+    // --- Compute look direction using rotation matrix ---
+    // Device orientation: R = Rz(α) · Rx(β) · Ry(γ)
+    // Screen normal (+z_device) in Earth frame (x=East, y=North, z=Up):
+    const aR = alpha * DEG;
+    const bR = beta  * DEG;
+    const gR = gamma * DEG;
+
+    const sa = Math.sin(aR), ca = Math.cos(aR);
+    const sb = Math.sin(bR), cb = Math.cos(bR);
+    const sg = Math.sin(gR), cg = Math.cos(gR);
+
+    // +z_device (screen normal) transformed to Earth frame
+    const east  =  sg * ca + cg * sb * sa;
+    const north =  sg * sa - cg * sb * ca;
+    const up    =  cg * cb;
+
+    // Elevation = how far up the screen points
+    const elevation = Math.asin(Math.max(-1, Math.min(1, up))) / DEG;
+
+    // Azimuth = compass direction the screen points toward
+    // Since the screen faces the USER, the direction the user looks
+    // through the phone is opposite: +180°
+    let azimuth = Math.atan2(east, north) / DEG;
+    azimuth = (azimuth + 180 + 360) % 360;
+
+    State.gyroAz = azimuth;
+    State.gyroEl = Math.max(-5, Math.min(90, elevation));
   },
 };
 
@@ -642,15 +667,55 @@ const PropagationModule = {
    STAR FIELD (static, generated once)
    ═══════════════════════════════════════════════════════════════ */
 const StarField = {
-  stars: [],  // { az, el, brightness, size }
+  stars: [],
 
   generate() {
     this.stars = [];
-    for (let i = 0; i < CONFIG.STAR_COUNT; i++) {
-      const az  = Utils.starRand(i * 3)     * 360;
-      const el  = Utils.starRand(i * 3 + 1) * 90;
-      const br  = Utils.starRand(i * 3 + 2);
-      this.stars.push({ az, el, brightness: br, size: br * 2 + 0.3 });
+    // Spectral colors: O/B (blue-white), A (white), F (pale yellow), G (yellow), K (orange), M (red)
+    const COLORS = [
+      { r: 155, g: 175, b: 255 },  // O/B blue-white
+      { r: 170, g: 190, b: 255 },  // B blue
+      { r: 200, g: 215, b: 255 },  // A white-blue
+      { r: 255, g: 250, b: 240 },  // F white
+      { r: 255, g: 240, b: 210 },  // G yellow-white (Sun-like)
+      { r: 255, g: 215, b: 170 },  // K orange
+      { r: 255, g: 180, b: 130 },  // M red-orange
+    ];
+
+    const STAR_COUNT = 800;
+    for (let i = 0; i < STAR_COUNT; i++) {
+      const r1 = Utils.starRand(i * 5);
+      const r2 = Utils.starRand(i * 5 + 1);
+      const r3 = Utils.starRand(i * 5 + 2);
+      const r4 = Utils.starRand(i * 5 + 3);
+      const r5 = Utils.starRand(i * 5 + 4);
+
+      const az = r1 * 360;
+      // More stars near horizon (realistic sky distribution)
+      const el = Math.asin(r2) * (180 / Math.PI);
+
+      // Magnitude: exponential distribution (many dim, few bright)
+      const mag = r3 * r3 * r3;  // cubic → heavily weighted toward dim
+      const brightness = 0.15 + mag * 0.85;
+      const size = 0.3 + mag * 2.5;
+
+      // Spectral type: weighted toward yellow/white (most common)
+      const colorWeights = [0.03, 0.05, 0.12, 0.25, 0.30, 0.15, 0.10];
+      let cumul = 0, colorIdx = 3;
+      for (let c = 0; c < colorWeights.length; c++) {
+        cumul += colorWeights[c];
+        if (r4 < cumul) { colorIdx = c; break; }
+      }
+      const col = COLORS[colorIdx];
+
+      // Milky Way band: denser stars roughly along az 60-120 and 240-300, el 20-70
+      const inMilkyWay = ((az > 50 && az < 130) || (az > 230 && az < 310)) && el > 15 && el < 75;
+      if (!inMilkyWay && r5 > 0.55) continue; // thin out stars outside milky way
+
+      // Twinkle phase offset
+      const twinklePhase = r5 * Math.PI * 2;
+
+      this.stars.push({ az, el, brightness, size, color: col, twinklePhase, isBright: mag > 0.7 });
     }
   },
 };
@@ -670,11 +735,12 @@ const SkyRenderer = {
   },
 
   resize() {
-    this.canvas.width  = window.innerWidth  * devicePixelRatio;
-    this.canvas.height = window.innerHeight * devicePixelRatio;
+    const dpr = devicePixelRatio || 1;
+    this.canvas.width  = window.innerWidth  * dpr;
+    this.canvas.height = window.innerHeight * dpr;
     this.canvas.style.width  = window.innerWidth  + 'px';
     this.canvas.style.height = window.innerHeight + 'px';
-    this.ctx.scale(devicePixelRatio, devicePixelRatio);
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   },
 
   draw() {
@@ -686,32 +752,80 @@ const SkyRenderer = {
     const viewEl = State.gyroEnabled ? State.gyroEl : State.viewEl;
 
     // ── Background ──────────────────────────────────────────
-    const grad = ctx.createRadialGradient(W/2, H/2, 0, W/2, H/2, Math.max(W, H) * 0.7);
-    grad.addColorStop(0, State.nightMode ? '#1a0000' : '#060c1a');
-    grad.addColorStop(1, State.nightMode ? '#0a0000' : '#020408');
+    // Deep space gradient
+    const grad = ctx.createRadialGradient(W/2, H*0.3, 0, W/2, H/2, Math.max(W, H) * 0.8);
+    if (State.nightMode) {
+      grad.addColorStop(0, '#120000');
+      grad.addColorStop(1, '#060000');
+    } else {
+      grad.addColorStop(0, '#070d1e');
+      grad.addColorStop(0.5, '#040812');
+      grad.addColorStop(1, '#020406');
+    }
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, W, H);
 
+    // ── Horizon atmospheric glow ───────────────────────────
+    // Show a subtle blue/teal glow near the horizon (elevation ~0-15°)
+    if (!State.nightMode) {
+      for (let az = 0; az < 360; az += 15) {
+        for (let el = 0; el < 12; el += 3) {
+          const hp = Utils.azElToXY(az, el, viewAz, viewEl, State.fov, W, H);
+          if (!hp) continue;
+          const hGrad = ctx.createRadialGradient(hp.x, hp.y, 0, hp.x, hp.y, 40);
+          const intensity = (1 - el / 12) * 0.015;
+          hGrad.addColorStop(0, `rgba(20, 60, 80, ${intensity})`);
+          hGrad.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.fillStyle = hGrad;
+          ctx.fillRect(hp.x - 40, hp.y - 40, 80, 80);
+        }
+      }
+    }
+
     // ── Stars ────────────────────────────────────────────────
+    const twinkleTime = Date.now() * 0.001;
     for (const star of StarField.stars) {
       const p = Utils.azElToXY(star.az, star.el, viewAz, viewEl, State.fov, W, H);
       if (!p) continue;
-      const alpha = 0.3 + star.brightness * 0.7;
-      const color = State.nightMode
-        ? `rgba(255, 180, 180, ${alpha * 0.5})`
-        : `rgba(200, 230, 255, ${alpha})`;
+      if (p.x < -10 || p.x > W+10 || p.y < -10 || p.y > H+10) continue;
+
+      // Time-based twinkling for bright stars
+      let twinkle = 1;
+      if (star.isBright) {
+        twinkle = 0.7 + 0.3 * Math.sin(twinkleTime * 2.5 + star.twinklePhase);
+      }
+
+      const alpha = (0.2 + star.brightness * 0.8) * twinkle;
+      const col = star.color;
+      const r = State.nightMode ? Math.min(255, col.r) : col.r;
+      const g = State.nightMode ? Math.floor(col.g * 0.3) : col.g;
+      const b = State.nightMode ? Math.floor(col.b * 0.3) : col.b;
+
+      // Core dot
       ctx.beginPath();
-      ctx.arc(p.x, p.y, star.size * 0.8, 0, Math.PI * 2);
-      ctx.fillStyle = color;
+      ctx.arc(p.x, p.y, star.size * 0.7, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
       ctx.fill();
-      // Twinkle effect for bright stars
-      if (star.brightness > 0.8) {
+
+      // Soft glow halo for brighter stars
+      if (star.brightness > 0.4) {
         ctx.beginPath();
         ctx.arc(p.x, p.y, star.size * 2.5, 0, Math.PI * 2);
-        ctx.fillStyle = State.nightMode
-          ? `rgba(255, 180, 180, 0.06)`
-          : `rgba(180, 220, 255, 0.08)`;
+        ctx.fillStyle = `rgba(${r},${g},${b},${alpha * 0.08})`;
         ctx.fill();
+      }
+
+      // Diffraction spikes for very bright stars
+      if (star.isBright) {
+        const spikeLen = star.size * 5 * twinkle;
+        ctx.save();
+        ctx.strokeStyle = `rgba(${r},${g},${b},${alpha * 0.25})`;
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(p.x - spikeLen, p.y); ctx.lineTo(p.x + spikeLen, p.y);
+        ctx.moveTo(p.x, p.y - spikeLen); ctx.lineTo(p.x, p.y + spikeLen);
+        ctx.stroke();
+        ctx.restore();
       }
     }
 
@@ -850,45 +964,73 @@ const SkyRenderer = {
   _drawSatellite(ctx, sat, viewAz, viewEl, W, H) {
     const p = Utils.azElToXY(sat.computed.az, sat.computed.el, viewAz, viewEl, State.fov, W, H);
     if (!p) return;
-    if (p.x < -20 || p.x > W+20 || p.y < -20 || p.y > H+20) return;
+    if (p.x < -30 || p.x > W+30 || p.y < -30 || p.y > H+30) return;
 
     const isSelected = State.selectedSat === sat;
     const tag = sat.tag;
+    const name = sat.name;
+
+    // Is this a "key" satellite that always shows its label?
+    const isKey = name.includes('ISS') || name.includes('TIANGONG') || name.includes('HUBBLE')
+               || name.includes('CSS') || name.includes('ZARYA');
 
     // Color by type
-    let color;
+    let color, glowColor;
     if (State.nightMode) {
       color = isSelected ? '#ff8800' : '#ff4400';
+      glowColor = color;
     } else {
-      if (isSelected)           color = '#00ff88';
-      else if (tag === 'iss')   color = '#00e6ff';
-      else if (tag === 'starlink') color = '#8888ff';
-      else if (tag === 'weather' || tag === 'noaa') color = '#ffb300';
-      else                      color = '#44aaff';
+      if (isSelected)              { color = '#00ff88'; glowColor = '#00ff88'; }
+      else if (tag === 'iss')      { color = '#00e6ff'; glowColor = '#00e6ff'; }
+      else if (tag === 'starlink') { color = '#aa99ff'; glowColor = '#8877dd'; }
+      else if (tag === 'weather')  { color = '#ffcc44'; glowColor = '#ffaa00'; }
+      else if (tag === 'special')  { color = '#ff77cc'; glowColor = '#ff55aa'; }
+      else                         { color = '#55bbff'; glowColor = '#3399dd'; }
     }
 
-    const r = isSelected ? 6 : 4;
+    const time = Date.now() * 0.001;
+    const r = isSelected ? 5 : (isKey ? 4 : 3);
 
     ctx.save();
 
-    // Outer glow
+    // ── Pulsing outer glow ──
+    const pulseR = isSelected ? (r * 4 + Math.sin(time * 4) * 3) : r * 3;
+    const glowGrad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, pulseR);
+    const glowAlpha = isSelected ? 0.3 : 0.15;
+    glowGrad.addColorStop(0, glowColor + (isSelected ? '4D' : '26'));
+    glowGrad.addColorStop(1, glowColor + '00');
     ctx.beginPath();
-    ctx.arc(p.x, p.y, r * 3, 0, Math.PI * 2);
-    const glowGrad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 3);
-    glowGrad.addColorStop(0, color.replace(')', ',0.3)').replace('rgb', 'rgba'));
-    glowGrad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.arc(p.x, p.y, pulseR, 0, Math.PI * 2);
     ctx.fillStyle = glowGrad;
     ctx.fill();
 
-    // Dot
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    // ── Satellite shape: diamond with cross ──
+    ctx.shadowColor = glowColor;
+    ctx.shadowBlur = isSelected ? 12 : 6;
     ctx.fillStyle = color;
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 8;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = isSelected ? 1.5 : 1;
+
+    // Diamond shape
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y - r);
+    ctx.lineTo(p.x + r * 0.7, p.y);
+    ctx.lineTo(p.x, p.y + r);
+    ctx.lineTo(p.x - r * 0.7, p.y);
+    ctx.closePath();
     ctx.fill();
 
-    // Direction tick (velocity direction)
+    // Solar panel lines (for key sats and selected)
+    if (isKey || isSelected) {
+      ctx.beginPath();
+      ctx.moveTo(p.x - r * 2.2, p.y);
+      ctx.lineTo(p.x + r * 2.2, p.y);
+      ctx.stroke();
+    }
+
+    ctx.shadowBlur = 0;
+
+    // ── Velocity arrow ──
     const trail = State.trails[sat.name];
     if (trail && trail.length >= 2) {
       const prev = trail[trail.length - 2];
@@ -896,39 +1038,60 @@ const SkyRenderer = {
       if (pp) {
         const dx = p.x - pp.x, dy = p.y - pp.y;
         const len = Math.hypot(dx, dy);
-        if (len > 0.5) {
+        if (len > 1) {
           const nx = dx / len, ny = dy / len;
+          const arrowLen = isSelected ? 16 : 12;
           ctx.beginPath();
-          ctx.moveTo(p.x, p.y);
-          ctx.lineTo(p.x + nx * 10, p.y + ny * 10);
+          ctx.moveTo(p.x + nx * r, p.y + ny * r);
+          ctx.lineTo(p.x + nx * arrowLen, p.y + ny * arrowLen);
           ctx.strokeStyle = color;
-          ctx.lineWidth = isSelected ? 2 : 1;
-          ctx.shadowBlur = 4;
+          ctx.lineWidth = isSelected ? 1.5 : 1;
+          ctx.globalAlpha = 0.7;
           ctx.stroke();
+          // Arrowhead
+          const ax = p.x + nx * arrowLen, ay = p.y + ny * arrowLen;
+          const perpX = -ny, perpY = nx;
+          ctx.beginPath();
+          ctx.moveTo(ax, ay);
+          ctx.lineTo(ax - nx * 4 + perpX * 2.5, ay - ny * 4 + perpY * 2.5);
+          ctx.lineTo(ax - nx * 4 - perpX * 2.5, ay - ny * 4 - perpY * 2.5);
+          ctx.closePath();
+          ctx.fillStyle = color;
+          ctx.fill();
+          ctx.globalAlpha = 1;
         }
       }
     }
 
-    // Name label (always for selected, or when nearby sats are few)
-    if (isSelected) {
-      ctx.shadowBlur = 0;
-      ctx.font = 'bold 11px -apple-system, sans-serif';
+    // ── Name label ──
+    if (isSelected || isKey) {
+      const label = name.length > 18 ? name.substring(0, 18) + '…' : name;
+      ctx.font = `${isSelected ? 'bold ' : ''}${isSelected ? 11 : 9}px -apple-system, sans-serif`;
       ctx.textAlign = 'left';
       ctx.textBaseline = 'bottom';
-      ctx.fillStyle = color;
+
+      const tw = ctx.measureText(label).width;
+      const lx = p.x + r + 6;
+      const ly = p.y - 2;
 
       // Background pill
-      const label = sat.name.substring(0, 16);
-      const tw = ctx.measureText(label).width;
-      ctx.fillStyle = 'rgba(10,15,26,0.7)';
-      ctx.fillRect(p.x + 9, p.y - 17, tw + 6, 15);
-      ctx.fillStyle = color;
-      ctx.fillText(label, p.x + 12, p.y - 4);
+      ctx.fillStyle = 'rgba(8,12,24,0.8)';
+      const pillH = isSelected ? 16 : 13;
+      const pillY = ly - pillH + 2;
+      ctx.beginPath();
+      ctx.roundRect(lx - 4, pillY, tw + 8, pillH, 3);
+      ctx.fill();
 
-      // Elevation badge
-      ctx.font = '9px monospace';
-      ctx.fillStyle = 'rgba(0,230,255,0.7)';
-      ctx.fillText(`${sat.computed.el.toFixed(1)}°`, p.x + 12, p.y + 10);
+      ctx.fillStyle = color;
+      ctx.fillText(label, lx, ly);
+
+      // Elevation sub-label for selected
+      if (isSelected) {
+        const subText = `El ${sat.computed.el.toFixed(1)}° · ${Math.round(sat.computed.alt)} km`;
+        ctx.font = '9px monospace';
+        ctx.fillStyle = `rgba(${State.nightMode ? '255,80,0' : '0,200,230'},0.7)`;
+        ctx.fillText(subText, lx, ly + 12);
+      }
     }
 
     ctx.restore();

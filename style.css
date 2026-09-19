@@ -81,53 +81,63 @@ html, body {
   z-index: 10;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: env(safe-area-inset-top, 0) 12px 0;
-  padding-top: calc(env(safe-area-inset-top, 0px) + 8px);
-  padding-bottom: 8px;
-  background: linear-gradient(to bottom, rgba(10,15,26,0.95) 70%, transparent);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
+  gap: 4px;
+  padding: env(safe-area-inset-top, 0) 8px 0;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 6px);
+  padding-bottom: 6px;
+  background: linear-gradient(to bottom, rgba(10,15,26,0.95) 60%, rgba(10,15,26,0.6) 85%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
 
 #appTitle {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   flex-shrink: 0;
 }
-.title-icon { font-size: 18px; }
+.title-icon { font-size: 14px; }
 .title-text {
-  font-size: 15px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   color: var(--cyan);
   text-transform: uppercase;
 }
 
 #statusChips {
   display: flex;
-  gap: 6px;
+  gap: 4px;
   flex: 1;
+  min-width: 0;
   overflow: hidden;
+}
+
+/* Hide time chip on narrow screens to save space */
+@media (max-width: 420px) {
+  #chipTime { display: none; }
+  .title-icon { display: none; }
 }
 
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
+  gap: 3px;
+  padding: 3px 6px;
   border-radius: 20px;
   border: 1px solid var(--border);
   background: rgba(10, 15, 26, 0.7);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   color: var(--cyan-dim);
   white-space: nowrap;
   letter-spacing: 0.03em;
   transition: var(--transition);
+  overflow: hidden;
+  max-width: 130px;
+  text-overflow: ellipsis;
 }
-.chip svg { width: 12px; height: 12px; fill: currentColor; flex-shrink: 0; }
+.chip svg { width: 10px; height: 10px; fill: currentColor; flex-shrink: 0; }
 .chip--ok    { color: var(--green); border-color: rgba(0,255,136,0.3); }
 .chip--warn  { color: var(--amber); border-color: rgba(255,179,0,0.3); }
 .chip--error { color: var(--red);   border-color: rgba(255,68,68,0.3); }
@@ -143,7 +153,7 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px; height: 36px;
+  width: 32px; height: 32px;
   border: none;
   border-radius: var(--radius-sm);
   background: rgba(0, 230, 255, 0.08);
@@ -151,9 +161,10 @@ html, body {
   cursor: pointer;
   transition: var(--transition);
   -webkit-tap-highlight-color: transparent;
-  min-width: 44px; min-height: 44px; /* touch target */
+  min-width: 36px; min-height: 36px; /* touch target */
+  padding: 0;
 }
-.icon-btn svg { width: 20px; height: 20px; fill: currentColor; }
+.icon-btn svg { width: 18px; height: 18px; fill: currentColor; }
 .icon-btn:hover, .icon-btn:active {
   background: var(--cyan-glow);
   color: var(--cyan);
@@ -167,19 +178,19 @@ html, body {
 /* ── Look HUD ───────────────────────────────────────────────── */
 #lookHud {
   position: fixed;
-  bottom: 16px;
+  bottom: 12px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 10;
   display: flex;
-  gap: 12px;
-  padding: 6px 14px;
+  gap: 10px;
+  padding: 4px 12px;
   border-radius: 20px;
   border: 1px solid var(--border);
   background: rgba(10, 15, 26, 0.75);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  font-size: 11px;
+  font-size: 10px;
   font-family: var(--font-mono);
   color: var(--cyan-dim);
   letter-spacing: 0.05em;
@@ -191,10 +202,10 @@ html, body {
 /* ── Radar Container ────────────────────────────────────────── */
 #radarContainer {
   position: fixed;
-  bottom: 72px;
-  right: 12px;
+  bottom: 54px;
+  right: 8px;
   z-index: 10;
-  width: 110px; height: 110px;
+  width: 90px; height: 90px;
   border-radius: 50%;
   border: 1px solid var(--border);
   background: rgba(10, 15, 26, 0.85);
@@ -207,10 +218,10 @@ html, body {
 #radarCanvas { width: 100%; height: 100%; display: block; }
 #radarLabel {
   position: absolute;
-  bottom: 4px;
+  bottom: 3px;
   left: 50%;
   transform: translateX(-50%);
-  font-size: 8px;
+  font-size: 7px;
   letter-spacing: 0.15em;
   color: var(--cyan-dim);
   font-family: var(--font-mono);
@@ -229,22 +240,23 @@ html, body {
 }
 
 .panel__handle {
-  width: 36px; height: 4px;
+  width: 32px; height: 4px;
   border-radius: 2px;
   background: var(--border-hi);
-  margin: 8px auto 0;
+  margin: 6px auto 0;
 }
 
 .panel__header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
+  gap: 6px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 .panel__header h2 {
-  flex: 1;
-  font-size: 13px;
+  flex-shrink: 0;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -254,20 +266,21 @@ html, body {
 .panel__search {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   flex: 1;
-  padding: 4px 10px;
+  padding: 3px 8px;
   border-radius: 20px;
   border: 1px solid var(--border);
   background: var(--bg-mid);
+  min-width: 0;
 }
-.panel__search svg { width: 14px; height: 14px; fill: var(--text-muted); flex-shrink: 0; }
+.panel__search svg { width: 12px; height: 12px; fill: var(--text-muted); flex-shrink: 0; }
 .panel__search input {
   flex: 1;
   border: none;
   background: transparent;
   color: var(--text);
-  font-size: 13px;
+  font-size: 12px;
   outline: none;
   min-width: 0;
 }
@@ -276,7 +289,7 @@ html, body {
 /* ── Satellite List Panel ───────────────────────────────────── */
 #satListPanel {
   bottom: 0; left: 0; right: 0;
-  max-height: 60vh;
+  max-height: 45vh;
   border-top: 1px solid var(--border);
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   display: flex;
@@ -287,17 +300,18 @@ html, body {
 
 .panel__filters {
   display: flex;
-  gap: 6px;
-  padding: 8px 16px;
+  gap: 5px;
+  padding: 6px 12px;
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
+  flex-shrink: 0;
 }
 .panel__filters::-webkit-scrollbar { display: none; }
 
 .filter-btn {
-  padding: 4px 12px;
+  padding: 4px 10px;
   border-radius: 20px;
   border: 1px solid var(--border);
   background: transparent;
@@ -309,6 +323,7 @@ html, body {
   white-space: nowrap;
   transition: var(--transition);
   -webkit-tap-highlight-color: transparent;
+  min-height: 28px;
 }
 .filter-btn.active, .filter-btn:hover {
   background: var(--cyan-glow);
@@ -320,7 +335,7 @@ html, body {
   flex: 1;
   overflow-y: auto;
   list-style: none;
-  padding: 4px 0;
+  padding: 2px 0;
   -webkit-overflow-scrolling: touch;
 }
 .sat-list::-webkit-scrollbar { width: 3px; }
@@ -330,12 +345,13 @@ html, body {
 .sat-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
+  gap: 8px;
+  padding: 8px 12px;
   border-bottom: 1px solid rgba(0,230,255,0.04);
   cursor: pointer;
   transition: background 0.15s;
   -webkit-tap-highlight-color: transparent;
+  min-height: 44px;
 }
 .sat-item:hover, .sat-item:active { background: var(--cyan-glow); }
 .sat-item.selected { background: rgba(0,230,255,0.08); }
@@ -620,8 +636,12 @@ html, body {
 
 /* ── Desktop layout adjustments ─────────────────────────────── */
 @media (min-width: 768px) {
+  .title-icon { display: inline !important; }
+  .title-text { font-size: 14px; }
+  .chip { font-size: 11px; padding: 4px 8px; max-width: none; }
+
   #satListPanel {
-    top: 56px;
+    top: 48px;
     bottom: 0;
     left: 0;
     right: auto;
@@ -635,21 +655,28 @@ html, body {
   #satListPanel.open { transform: translateX(0); }
 
   #telemetryPanel {
-    top: 56px;
+    top: 48px;
   }
 
-  #lookHud { bottom: 24px; }
+  .panel__header { padding: 12px 16px; }
+  .panel__header h2 { font-size: 13px; }
+  .panel__search input { font-size: 13px; }
+
+  #lookHud { bottom: 24px; font-size: 11px; }
 
   #radarContainer {
-    width: 140px; height: 140px;
-    bottom: 80px; right: 20px;
+    width: 130px; height: 130px;
+    bottom: 70px; right: 16px;
   }
+  #radarLabel { font-size: 8px; }
+
+  .sat-item { padding: 10px 16px; }
 }
 
 /* ── Safe area for notched phones ───────────────────────────── */
 @supports (padding: max(0px)) {
-  .toast { bottom: max(60px, calc(env(safe-area-inset-bottom) + 50px)); }
-  #lookHud { bottom: max(16px, calc(env(safe-area-inset-bottom) + 8px)); }
-  #radarContainer { bottom: max(72px, calc(env(safe-area-inset-bottom) + 62px)); }
+  .toast { bottom: max(50px, calc(env(safe-area-inset-bottom) + 40px)); }
+  #lookHud { bottom: max(12px, calc(env(safe-area-inset-bottom) + 6px)); }
+  #radarContainer { bottom: max(54px, calc(env(safe-area-inset-bottom) + 44px)); }
 }
 
