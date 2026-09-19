@@ -3,8 +3,8 @@
  * Cache-first for app shell, network-first for TLE data.
  */
 
-const CACHE_NAME    = 'sattracker-v1';
-const TLE_CACHE     = 'sattracker-tle-v1';
+const CACHE_NAME    = 'sattracker-v3';
+const TLE_CACHE     = 'sattracker-tle-v3';
 const SHELL_ASSETS  = [
   './',
   './index.html',
@@ -18,30 +18,28 @@ const SHELL_ASSETS  = [
 ];
 
 // Celestrak TLE endpoints
-const TLE_ORIGINS = [
-  'celestrak.org',
-  'celestrak.com',
-];
+const TLE_ORIGIN = 'https://celestrak.org';
 
-/* ── Install: pre-cache shell ───────────────────────────────── */
 self.addEventListener('install', event => {
+  self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(SHELL_ASSETS.filter(Boolean)))
-      .then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then(cache => {
+      return cache.addAll(SHELL_ASSETS);
+    })
   );
 });
 
-/* ── Activate: clean old caches ────────────────────────────── */
 self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(
-        keys
-          .filter(k => k !== CACHE_NAME && k !== TLE_CACHE)
-          .map(k => caches.delete(k))
-      )
-    ).then(() => self.clients.claim())
+    caches.keys().then(keys => {
+      return Promise.all(
+        keys.map(key => {
+          if (key !== CACHE_NAME && key !== TLE_CACHE) {
+            return caches.delete(key);
+          }
+        })
+      );
+    }).then(() => self.clients.claim())
   );
 });
 
