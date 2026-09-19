@@ -1,0 +1,35 @@
+{
+  "name": "SatTracker – Interaktiver Sternenatlas",
+  "short_name": "SatTracker",
+  "description": "Echtzeit-Satelliten-Tracker mit interaktivem Himmelsdom",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#0a0f1a",
+  "background_color": "#0a0f1a",
+  "lang": "de",
+  "categories": ["navigation", "utilities"],
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "ISS verfolgen",
+      "short_name": "ISS",
+      "description": "Zeige ISS-Position",
+      "url": "./?sat=ISS"
+    }
+  ]
+}
