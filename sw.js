@@ -3,8 +3,8 @@
  * Cache-first for app shell, network-first for TLE data.
  */
 
-const CACHE_NAME    = 'sattracker-v7';
-const TLE_CACHE     = 'sattracker-tle-v7';
+const CACHE_NAME    = 'sattracker-v8';
+const TLE_CACHE     = 'sattracker-tle-v8';
 const SHELL_ASSETS  = [
   './',
   './index.html',

@@ -698,11 +698,11 @@ const StarField = {
 
     const STAR_COUNT = 800;
     for (let i = 0; i < STAR_COUNT; i++) {
-      const r1 = Utils.starRand(i * 5);
-      const r2 = Utils.starRand(i * 5 + 1);
-      const r3 = Utils.starRand(i * 5 + 2);
-      const r4 = Utils.starRand(i * 5 + 3);
-      const r5 = Utils.starRand(i * 5 + 4);
+      const r1 = Math.random();
+      const r2 = Math.random();
+      const r3 = Math.random();
+      const r4 = Math.random();
+      const r5 = Math.random();
 
       const az = r1 * 360;
       // More stars near horizon (realistic sky distribution)
