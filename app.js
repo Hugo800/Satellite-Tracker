@@ -222,6 +222,7 @@ const GeoModule = {
   start() {
     if (!navigator.geolocation) {
       UIModule.showPermStatus('Geolocation wird im Browser nicht unterstützt', true);
+      setTimeout(() => UIModule.dismissOverlay(), 1500);
       return;
     }
     UIModule.showPermStatus('GPS-Standort wird abgefragt…');
@@ -230,6 +231,8 @@ const GeoModule = {
       err => this._onError(err),
       { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
     );
+    // Dismiss immediately so user isn't stuck waiting for a GPS lock
+    setTimeout(() => UIModule.dismissOverlay(), 500);
   },
 
   _onPosition(pos) {
@@ -243,13 +246,13 @@ const GeoModule = {
     UIModule.updateGeoChip(true);
     UIModule.showPermStatus('Standort aktiv ✓');
     PropagationModule.update();
-    setTimeout(() => UIModule.dismissOverlay(), 600);
   },
 
   _onError(err) {
     console.warn('Geo error:', err.message);
     UIModule.showPermStatus('GPS nicht verfügbar – Standardort aktiv', false);
     UIModule.updateGeoChip(true);
+    setTimeout(() => UIModule.dismissOverlay(), 1500);
   },
 };
 
@@ -404,6 +407,7 @@ const OrientationModule = {
   async requestPermission() {
     if (typeof DeviceOrientationEvent === 'undefined') {
       UIModule.showPermStatus('Gyroskop nicht verfügbar', true);
+      setTimeout(() => UIModule.dismissOverlay(), 1500);
       return false;
     }
     // iOS 13+ requires explicit permission
@@ -412,14 +416,17 @@ const OrientationModule = {
         const res = await DeviceOrientationEvent.requestPermission();
         if (res !== 'granted') {
           UIModule.showPermStatus('Gyroskop-Zugriff verweigert', true);
+          setTimeout(() => UIModule.dismissOverlay(), 1500);
           return false;
         }
       } catch(e) {
         UIModule.showPermStatus('Gyroskop-Fehler: ' + e.message, true);
+        setTimeout(() => UIModule.dismissOverlay(), 1500);
         return false;
       }
     }
     this._attach();
+    setTimeout(() => UIModule.dismissOverlay(), 500);
     return true;
   },
 
