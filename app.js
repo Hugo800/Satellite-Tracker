@@ -94,6 +94,8 @@ const State = {
 
   // Gyroscope offset
   gyroEnabled: false,
+  gyroAzOffset: 0,
+  mapMode: false,
   gyroAz:  0,
   gyroEl:  90,
 
@@ -451,7 +453,7 @@ const OrientationModule = {
     const rawElevation = 90 - beta;
     const elevation = Math.max(0, Math.min(90, rawElevation));
 
-    State.gyroAz = alpha;
+    State.gyroAz = (alpha + State.gyroAzOffset + 360) % 360;
     State.gyroEl = elevation;
   },
 };
@@ -498,8 +500,15 @@ const TouchModule = {
       const dx = e.clientX - State.dragStartX;
       const dy = e.clientY - State.dragStartY;
       const sensitivity = State.fov / Math.min(window.innerWidth, window.innerHeight) * 0.8;
-      State.viewAz = (State.dragViewAz - dx * sensitivity + 360) % 360;
-      State.viewEl = Math.max(0, Math.min(90, State.dragViewEl + dy * sensitivity));
+      
+      if (State.gyroEnabled) {
+        // Calibration mode: pan horizontally to adjust azimuth offset
+        State.gyroAzOffset -= (dx * sensitivity * 0.2);
+        State.dragStartX = e.clientX; // reset for continuous drag
+      } else {
+        State.viewAz = (State.dragViewAz - dx * sensitivity + 360) % 360;
+        State.viewEl = Math.max(0, Math.min(90, State.dragViewEl + dy * sensitivity));
+      }
     } else if (this._touches.size === 2) {
       const dist = this._getPinchDist();
       const delta = this._lastPinchDist - dist;
@@ -991,6 +1000,43 @@ const SkyRenderer = {
 
     ctx.save();
 
+    // ── Future Orbit Path (Flugbahn) ──
+    if (isSelected) {
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      let t = Date.now();
+      let lastP = p;
+      for (let i = 1; i <= 30; i++) {
+        t += 60000; // +1 minute
+        const posVel = satellite.propagate(sat.satrec, new Date(t));
+        if (posVel.position) {
+          const gmst = satellite.gstime(new Date(t));
+          const posGd = satellite.eciToGeodetic(posVel.position, gmst);
+          const look = satellite.ecfToLookAngles(State.observer, satellite.geodeticToEcf(posGd));
+          const el = look.elevation * 180 / Math.PI;
+          if (el > 0) {
+            const az = look.azimuth * 180 / Math.PI;
+            const fp = Utils.azElToXY(az, el, viewAz, viewEl, State.fov, W, H);
+            if (fp) {
+              // Avoid wrapping around the screen abruptly
+              if (Math.hypot(fp.x - lastP.x, fp.y - lastP.y) < W/2) {
+                ctx.lineTo(fp.x, fp.y);
+              } else {
+                ctx.moveTo(fp.x, fp.y);
+              }
+              lastP = fp;
+            }
+          }
+        }
+      }
+      ctx.strokeStyle = color;
+      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 1;
+      ctx.globalAlpha = 0.5;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1.0;
+    }
     // ── Pulsing outer glow ──
     const pulseR = isSelected ? (r * 4 + Math.sin(time * 4) * 3) : r * 3;
     const glowGrad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, pulseR);
@@ -1002,29 +1048,36 @@ const SkyRenderer = {
     ctx.fillStyle = glowGrad;
     ctx.fill();
 
-    // ── Satellite shape: diamond with cross ──
+    // ── Satellite shape ──
     ctx.shadowColor = glowColor;
     ctx.shadowBlur = isSelected ? 12 : 6;
     ctx.fillStyle = color;
     ctx.strokeStyle = color;
     ctx.lineWidth = isSelected ? 1.5 : 1;
 
-    // Diamond shape
-    ctx.beginPath();
-    ctx.moveTo(p.x, p.y - r);
-    ctx.lineTo(p.x + r * 0.7, p.y);
-    ctx.lineTo(p.x, p.y + r);
-    ctx.lineTo(p.x - r * 0.7, p.y);
-    ctx.closePath();
-    ctx.fill();
+    ctx.translate(p.x, p.y);
+    const scale = isSelected ? 1.5 : (isKey ? 1.2 : 0.8);
+    ctx.scale(scale, scale);
 
-    // Solar panel lines (for key sats and selected)
-    if (isKey || isSelected) {
-      ctx.beginPath();
-      ctx.moveTo(p.x - r * 2.2, p.y);
-      ctx.lineTo(p.x + r * 2.2, p.y);
-      ctx.stroke();
+    if (tag === 'iss') {
+      // ISS SVG shape
+      const path = new Path2D('M -10,-4 L -10,4 L -4,4 L -4,1 L 4,1 L 4,4 L 10,4 L 10,-4 L 4,-4 L 4,-1 L -4,-1 L -4,-4 Z M -2,-2 L 2,-2 L 2,2 L -2,2 Z');
+      ctx.fill(path);
+      ctx.stroke(path);
+    } else if (tag === 'starlink') {
+      // Starlink SVG shape (flat panel)
+      const path = new Path2D('M -6,-2 L 6,-2 L 6,2 L -6,2 Z M -6,0 L -8,0 M 6,0 L 8,0');
+      ctx.fill(path);
+      ctx.stroke(path);
+    } else {
+      // Default SVG shape
+      const path = new Path2D('M 0,-5 L 5,0 L 0,5 L -5,0 Z M -6,-1 L -8,-1 L -8,1 L -6,1 Z M 6,-1 L 8,-1 L 8,1 L 6,1 Z');
+      ctx.fill(path);
+      ctx.stroke(path);
     }
+
+    ctx.scale(1/scale, 1/scale);
+    ctx.translate(-p.x, -p.y);
 
     ctx.shadowBlur = 0;
 
@@ -1493,9 +1546,17 @@ const App = {
     // Init renderers
     SkyRenderer.init();
     RadarRenderer.init();
+    MapRenderer.init();
 
     // Init UI
     UIModule.init();
+
+    document.getElementById('btnToggleMap').addEventListener('click', () => {
+      State.mapMode = !State.mapMode;
+      document.body.classList.toggle('map-view', State.mapMode);
+      MapRenderer.active = State.mapMode;
+      if (State.mapMode) MapRenderer.resize();
+    });
 
     // Init touch/mouse
     TouchModule.init(document.getElementById('skyCanvas'));
@@ -1532,6 +1593,7 @@ const App = {
     // Always render
     SkyRenderer.draw();
     RadarRenderer.draw();
+    MapRenderer.draw();
   },
 
   _registerSW() {
@@ -1550,3 +1612,100 @@ if (document.readyState === 'loading') {
   App.init();
 }
 
+const MapRenderer = {
+  canvas: null, ctx: null, geoData: null,
+  active: false,
+
+  async init() {
+    this.canvas = document.getElementById('mapCanvas');
+    this.ctx = this.canvas.getContext('2d');
+    try {
+      const res = await fetch('map.json');
+      this.geoData = await res.json();
+    } catch(e) { console.error("Map load failed"); }
+    window.addEventListener('resize', () => this.resize());
+    this.resize();
+  },
+
+  resize() {
+    const dpr = devicePixelRatio || 1;
+    this.canvas.width = window.innerWidth * dpr;
+    this.canvas.height = window.innerHeight * dpr;
+    this.canvas.style.width = window.innerWidth + 'px';
+    this.canvas.style.height = window.innerHeight + 'px';
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  },
+
+  draw() {
+    if (!this.active || !this.geoData) return;
+    const ctx = this.ctx;
+    const W = window.innerWidth, H = window.innerHeight;
+    
+    ctx.fillStyle = State.nightMode ? '#0a0000' : '#020408';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.strokeStyle = State.nightMode ? 'rgba(255, 60, 0, 0.2)' : 'rgba(0, 200, 255, 0.2)';
+    ctx.lineWidth = 1;
+    
+    // Draw map
+    ctx.beginPath();
+    for (const feature of this.geoData.features) {
+      if (feature.geometry.type === 'Polygon') {
+        this._drawPoly(feature.geometry.coordinates, W, H, ctx);
+      } else if (feature.geometry.type === 'MultiPolygon') {
+        for (const poly of feature.geometry.coordinates) {
+          this._drawPoly(poly, W, H, ctx);
+        }
+      }
+    }
+    ctx.stroke();
+
+    // Draw satellites
+    const time = new Date();
+    for (const sat of State.satellites) {
+      const posAndVel = satellite.propagate(sat.satrec, time);
+      if (!posAndVel.position) continue;
+      const gmst = satellite.gstime(time);
+      const posGd = satellite.eciToGeodetic(posAndVel.position, gmst);
+      
+      let lon = posGd.longitude * 180 / Math.PI;
+      let lat = posGd.latitude * 180 / Math.PI;
+      
+      const x = (lon + 180) / 360 * W;
+      const y = (90 - lat) / 180 * H;
+
+      const isSelected = State.selectedSat === sat;
+      const color = isSelected ? '#00ff88' : (State.nightMode ? '#ff4400' : 'rgba(0, 230, 255, 0.6)');
+      
+      ctx.beginPath();
+      ctx.arc(x, y, isSelected ? 4 : 1.5, 0, Math.PI*2);
+      ctx.fillStyle = color;
+      ctx.fill();
+
+      // Draw footprint for selected
+      if (isSelected) {
+        ctx.beginPath();
+        const fpRadius = W * (sat.computed.alt / 6371) * 0.15; // rough footprint estimation
+        ctx.arc(x, y, fpRadius, 0, Math.PI*2);
+        ctx.fillStyle = 'rgba(0, 255, 136, 0.1)';
+        ctx.fill();
+        
+        ctx.fillStyle = color;
+        ctx.font = '12px sans-serif';
+        ctx.fillText(sat.name.substring(0,15), x + 8, y + 4);
+      }
+    }
+  },
+
+  _drawPoly(coords, W, H, ctx) {
+    for (const ring of coords) {
+      for (let i = 0; i < ring.length; i++) {
+        const [lon, lat] = ring[i];
+        const x = (lon + 180) / 360 * W;
+        const y = (90 - lat) / 180 * H;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+    }
+  }
+};
