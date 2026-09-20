@@ -36,7 +36,7 @@ export const GROUP_ORDER: SatelliteGroup[] = ['stations', 'brightest', 'weather'
 const STARLINK_GROUP_ID = GROUP_ORDER.indexOf('starlink');
 
 /** Restlicht für Satelliten im Erdschatten – sichtbar, aber klar abgesetzt. */
-const ECLIPSE_FACTOR = 0.14;
+const ECLIPSE_FACTOR = 0.3;
 
 const dummy = new Object3D();
 const zeroMatrix = new Matrix4().makeScale(0, 0, 0);
@@ -98,7 +98,7 @@ export function SatelliteField({
   // Wenige, große Objekte vertragen das detaillierte Symbol; bei Hunderten
   // gleichzeitig ist ein Leuchtpunkt deutlich lesbarer.
   const activeTexture = mode === 'nakedEye' ? iconTexture : dotTexture;
-  const baseSize = mode === 'nakedEye' ? 18 : 12;
+  const baseSize = mode === 'nakedEye' ? 34 : 24;
   const baseSizeRef = useRef(baseSize);
   baseSizeRef.current = baseSize;
 
@@ -208,15 +208,15 @@ export function SatelliteField({
       const azimuth = state.prevAz[i] + angleDelta(state.curAz[i], state.prevAz[i]) * t;
       azElToVector(azimuth, elevation, SKY_RADIUS, dummy.position);
 
-      // Hellere Objekte wirken größer; horizontnahe werden zusätzlich gedämpft.
-      const brightnessScale = clamp(1.35 - 0.12 * (magnitude - 1), 0.6, 1.5);
-      const horizonFade = 0.6 + 0.4 * Math.min(1, elevation / 0.35);
-      dummy.scale.setScalar(size * brightnessScale * horizonFade * (eclipsed ? 0.6 : 1));
+      // Hellere Objekte wirken größer; horizontnahe werden leicht gedämpft.
+      const brightnessScale = clamp(1.5 - 0.1 * (magnitude - 1), 0.85, 1.7);
+      const horizonFade = 0.78 + 0.22 * Math.min(1, elevation / 0.35);
+      dummy.scale.setScalar(size * brightnessScale * horizonFade * (eclipsed ? 0.8 : 1));
       dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
 
       colorScratch.copy(palette[groupId]);
-      colorScratch.multiplyScalar(eclipsed ? ECLIPSE_FACTOR : 0.7 + 0.3 * horizonFade);
+      colorScratch.multiplyScalar(eclipsed ? ECLIPSE_FACTOR : 0.88 + 0.12 * horizonFade);
       if (refreshColors) mesh.setColorAt(i, colorScratch);
 
       if (i === selected) {

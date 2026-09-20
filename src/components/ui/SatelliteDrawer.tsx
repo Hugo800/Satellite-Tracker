@@ -115,7 +115,7 @@ export function SatelliteDrawer(): React.JSX.Element {
           drawerOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
         style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}
-        aria-hidden={!drawerOpen}
+        inert={!drawerOpen}
       >
         <header className="flex items-center gap-2 border-b border-sky-400/20 px-3 py-3">
           <SlidersHorizontal size={16} className="text-sky-300" />

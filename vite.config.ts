@@ -16,18 +16,9 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
         navigateFallback: 'index.html',
-        runtimeCaching: [
-          {
-            // TLE-Kataloge: schnell aus dem Cache, im Hintergrund erneuern.
-            urlPattern: ({ url }) => url.hostname.endsWith('celestrak.org'),
-            handler: 'StaleWhileRevalidate',
-            options: {
-              cacheName: 'tle-catalog',
-              expiration: { maxEntries: 32, maxAgeSeconds: 60 * 60 * 12 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-        ],
+        // TLE-Abrufe bleiben bewusst ungeroutet: Der SGP4-Worker hält sie in
+        // einem eigenen CacheStorage-Eintrag und behandelt Netzfehler selbst.
+        // Eine Workbox-Route würde bei Ausfällen nur „no-response“ werfen.
       },
       manifest: {
         id: './',

@@ -60,7 +60,8 @@ const vertexShader = /* glsl */ `
     float horizonBoost = 1.0 - smoothstep(0.0, 0.55, max(altitude, 0.0));
     float twinkle = 1.0 + (0.08 + 0.26 * horizonBoost) * sin(uTime * 2.7 + aPhase * 8.0);
 
-    vAlpha = twinkle;
+    // Sterne bleiben bewusst Hintergrund – sie dürfen die Satelliten nicht überstrahlen.
+    vAlpha = twinkle * 0.5;
 
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mvPosition;
@@ -79,7 +80,7 @@ const fragmentShader = /* glsl */ `
     if (d > 0.5) discard;
     float core = smoothstep(0.5, 0.0, d);
     float halo = pow(core, 3.0);
-    float alpha = clamp(vAlpha, 0.0, 1.0) * (core * 0.45 + halo * 0.85);
+    float alpha = clamp(vAlpha, 0.0, 1.0) * (core * 0.28 + halo * 0.55);
     if (alpha < 0.004) discard;
     gl_FragColor = vec4(vColor, alpha);
   }
@@ -124,11 +125,11 @@ export function Starfield(): React.JSX.Element {
 
       // Potenzverteilung -> wenige helle Leitsterne, viele Hintergrundsterne.
       const brightness = Math.pow(Math.random(), 3.4);
-      sizes[i] = 0.9 + brightness * 6.2 + (inMilkyWay ? -0.2 : 0);
+      sizes[i] = 0.7 + brightness * 4.3 + (inMilkyWay ? -0.15 : 0);
       phases[i] = Math.random();
 
       const [r0, g0, b0] = pickColor(Math.random());
-      const intensity = 0.55 + brightness * 0.65;
+      const intensity = 0.45 + brightness * 0.55;
       colors[i * 3 + 0] = r0 * intensity;
       colors[i * 3 + 1] = g0 * intensity;
       colors[i * 3 + 2] = b0 * intensity;
