@@ -14,15 +14,7 @@ import { useDeviceOrientation } from '../../hooks/useDeviceOrientation';
 import { viewState } from '../../state/runtime';
 import { useAppStore } from '../../state/store';
 import { formatNumber } from '../../utils/format';
-import type { SkyPhase } from '../../types';
-
-const PHASE_LABEL: Record<SkyPhase, string> = {
-  day: 'Tag',
-  civil: 'Bürgerliche Dämmerung',
-  nautical: 'Nautische Dämmerung',
-  astronomical: 'Astronomische Dämmerung',
-  night: 'Astronomische Nacht',
-};
+import { ModeSwitch } from './ModeSwitch';
 
 function IconButton({
   active,
@@ -53,10 +45,11 @@ function IconButton({
   );
 }
 
-/** Kopfzeile: Standort, Dämmerungsphase, Blickrichtung und Moduswahl. */
+/** Kopfzeile: Standort, Sonnen-/Mondstand, Blickrichtung und Moduswahl. */
 export function TopBar(): React.JSX.Element {
   const observer = useAppStore((s) => s.observer);
   const sun = useAppStore((s) => s.sun);
+  const moon = useAppStore((s) => s.moon);
   const status = useAppStore((s) => s.status);
   const loading = useAppStore((s) => s.loading);
   const catalog = useAppStore((s) => s.catalog);
@@ -108,7 +101,11 @@ export function TopBar(): React.JSX.Element {
             </span>
             <span className="inline-flex items-center gap-1">
               <Sunrise size={10} />
-              {PHASE_LABEL[sun.phase]} ({formatNumber(sun.altitudeDeg, 1)}°)
+              Sonne {formatNumber(sun.altitudeDeg, 0)}°
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <Moon size={10} />
+              Mond {formatNumber(moon.altitudeDeg, 0)}°
             </span>
             <span className="inline-flex items-center gap-1">
               <Compass size={10} />
@@ -149,6 +146,10 @@ export function TopBar(): React.JSX.Element {
           Kein Orientierungssensor erkannt – Touch-Navigation aktiv.
         </div>
       )}
+
+      <div className="pointer-events-auto w-full max-w-xs">
+        <ModeSwitch compact />
+      </div>
 
       {arEnabled && compassStatus === 'calibrating' && (
         <div className="pointer-events-none self-start rounded-md border border-amber-400/30 bg-amber-950/40 px-2 py-1 text-[10px] text-amber-200">

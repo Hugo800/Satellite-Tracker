@@ -3,9 +3,11 @@ import type {
   CatalogFilters,
   CompassStatus,
   GeoCoord,
+  MoonState,
   PassPrediction,
   SatelliteGroup,
   SatelliteMeta,
+  SkyFilterMode,
   SunState,
 } from '../types';
 
@@ -31,6 +33,7 @@ export interface AppState {
   nightMode: boolean;
   showTrails: boolean;
   sun: SunState;
+  moon: MoonState;
 
   setObserver: (observer: GeoCoord) => void;
   setGeoError: (message: string | null) => void;
@@ -41,6 +44,7 @@ export interface AppState {
   setPass: (pass: PassPrediction | null) => void;
   setPassPending: (pending: boolean) => void;
   setFilters: (patch: Partial<CatalogFilters>) => void;
+  setMode: (mode: SkyFilterMode) => void;
   toggleGroup: (group: SatelliteGroup) => void;
   setDrawerOpen: (open: boolean) => void;
   setAr: (enabled: boolean) => void;
@@ -49,14 +53,12 @@ export interface AppState {
   toggleNightMode: () => void;
   toggleTrails: () => void;
   setSun: (sun: SunState) => void;
+  setMoon: (moon: MoonState) => void;
 }
 
 const DEFAULT_FILTERS: CatalogFilters = {
-  visibleOnly: true,
-  stations: true,
-  brightest: true,
-  starlink: true,
-  weather: true,
+  mode: 'all',
+  includeBelowHorizon: false,
   query: '',
 };
 
@@ -81,7 +83,8 @@ export const useAppStore = create<AppState>((set) => ({
   compassStatus: 'unknown',
   nightMode: false,
   showTrails: true,
-  sun: { altitudeDeg: -18, azimuthDeg: 0, phase: 'night', daylight: 0 },
+  sun: { altitudeDeg: -18, azimuthDeg: 0 },
+  moon: { altitudeDeg: -18, azimuthDeg: 0, illumination: 0.5 },
 
   setObserver: (observer) => set({ observer, geoError: null }),
   setGeoError: (geoError) => set({ geoError }),
@@ -94,6 +97,7 @@ export const useAppStore = create<AppState>((set) => ({
   setPass: (pass) => set({ pass, passPending: false }),
   setPassPending: (passPending) => set({ passPending }),
   setFilters: (patch) => set((state) => ({ filters: { ...state.filters, ...patch } })),
+  setMode: (mode) => set((state) => ({ filters: { ...state.filters, mode } })),
   toggleGroup: (group) =>
     set((state) => ({
       activeGroups: state.activeGroups.includes(group)
@@ -107,4 +111,5 @@ export const useAppStore = create<AppState>((set) => ({
   toggleNightMode: () => set((state) => ({ nightMode: !state.nightMode })),
   toggleTrails: () => set((state) => ({ showTrails: !state.showTrails })),
   setSun: (sun) => set({ sun }),
+  setMoon: (moon) => set({ moon }),
 }));

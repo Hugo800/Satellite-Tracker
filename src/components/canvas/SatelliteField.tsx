@@ -1,24 +1,42 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { useFrame } from '@react-three/fiber';
-import { Color, InstancedMesh, Matrix4, Object3D } from 'three';
-import { angleDelta, azElToVector } from '../../math/coords';
-import { TELEMETRY_STRIDE, T_AZ, T_ECLIPSED, T_EL, T_RANGE } from '../../math/telemetryLayout';
+import { useFrame, useThree } from '@react-three/fiber';
+import { Color, InstancedMesh, Matrix4, Mesh, Object3D, PlaneGeometry } from 'three';
+import { angleDelta, azElToVector, clamp } from '../../math/coords';
+import {
+  TELEMETRY_STRIDE,
+  T_AZ,
+  T_ECLIPSED,
+  T_EL,
+  T_MAG,
+  T_RANGE,
+} from '../../math/telemetryLayout';
+import { passesSkyFilter } from '../../math/visibility';
 import { telemetry } from '../../state/runtime';
 import { useAppStore } from '../../state/store';
 import type { SatelliteGroup, SatelliteMeta } from '../../types';
+import {
+  createSatelliteDotTexture,
+  createSatelliteTexture,
+  createSelectionTexture,
+} from './satelliteTextures';
 
 export const SKY_RADIUS = 430;
 
-const GROUP_COLORS: Record<SatelliteGroup, string> = {
+/** Obergrenze über alle Kataloggruppen – fix, damit die Mesh nie neu montiert wird. */
+export const MAX_INSTANCES = 4096;
+
+export const GROUP_COLORS: Record<SatelliteGroup, string> = {
   stations: '#fbbf24',
   brightest: '#f1f5f9',
   weather: '#34d399',
   starlink: '#60a5fa',
 };
 
-const SELECTED_COLOR = '#f472b6';
+export const GROUP_ORDER: SatelliteGroup[] = ['stations', 'brightest', 'weather', 'starlink'];
+const STARLINK_GROUP_ID = GROUP_ORDER.indexOf('starlink');
+
 /** Restlicht für Satelliten im Erdschatten – sichtbar, aber klar abgesetzt. */
-const ECLIPSE_FACTOR = 0.12;
+const ECLIPSE_FACTOR = 0.14;
 
 const dummy = new Object3D();
 const zeroMatrix = new Matrix4().makeScale(0, 0, 0);
@@ -31,15 +49,9 @@ interface Interpolator {
   curEl: Float32Array;
   revision: number;
   elapsed: number;
-}
-
-function ensureCapacity(state: Interpolator, count: number): void {
-  if (state.curAz.length >= count) return;
-  state.prevAz = new Float32Array(count);
-  state.prevEl = new Float32Array(count);
-  state.curAz = new Float32Array(count);
-  state.curEl = new Float32Array(count);
-  state.revision = -1;
+  colorRevision: number;
+  colorMode: string;
+  colorSelected: number | null;
 }
 
 /**
@@ -47,69 +59,93 @@ function ensureCapacity(state: Interpolator, count: number): void {
  *
  * Der Worker liefert Telemetrie mit 10 Hz; zwischen den Ticks wird die
  * Blickrichtung interpoliert, sodass die Bewegung mit voller Framerate läuft.
+ * Die Instanzen sind bildschirmparallele Billboards – dafür genügt es, die
+ * Kamera-Quaternion einmal pro Frame zu übernehmen.
  */
 export function SatelliteField({
   tickIntervalMs = 100,
 }: {
   tickIntervalMs?: number;
-}): React.JSX.Element | null {
+}): React.JSX.Element {
   const meshRef = useRef<InstancedMesh>(null);
+  const selectionRef = useRef<Mesh>(null);
+  const camera = useThree((s) => s.camera);
+
   const catalog = useAppStore((s) => s.catalog);
-  const filters = useAppStore((s) => s.filters);
+  const mode = useAppStore((s) => s.filters.mode);
   const selectedIndex = useAppStore((s) => s.selectedIndex);
 
-  const filtersRef = useRef(filters);
+  const modeRef = useRef(mode);
   const selectedRef = useRef(selectedIndex);
-  filtersRef.current = filters;
+  modeRef.current = mode;
   selectedRef.current = selectedIndex;
 
-  const capacity = Math.max(catalog.length, 1);
+  const dotTexture = useMemo(createSatelliteDotTexture, []);
+  const iconTexture = useMemo(createSatelliteTexture, []);
+  const selectionTexture = useMemo(createSelectionTexture, []);
+  const geometry = useMemo(() => new PlaneGeometry(1, 1), []);
+
+  useEffect(
+    () => () => {
+      dotTexture.dispose();
+      iconTexture.dispose();
+      selectionTexture.dispose();
+      geometry.dispose();
+    },
+    [dotTexture, iconTexture, selectionTexture, geometry],
+  );
+
+  // Wenige, große Objekte vertragen das detaillierte Symbol; bei Hunderten
+  // gleichzeitig ist ein Leuchtpunkt deutlich lesbarer.
+  const activeTexture = mode === 'nakedEye' ? iconTexture : dotTexture;
+  const baseSize = mode === 'nakedEye' ? 18 : 12;
+  const baseSizeRef = useRef(baseSize);
+  baseSizeRef.current = baseSize;
 
   /** Gruppenzuordnung als typisiertes Array – Zugriff in der Renderloop ohne Objekt-Lookups. */
   const groupIds = useMemo(() => {
-    const order: SatelliteGroup[] = ['stations', 'brightest', 'weather', 'starlink'];
-    const ids = new Uint8Array(capacity);
+    const ids = new Uint8Array(MAX_INSTANCES);
     catalog.forEach((sat: SatelliteMeta) => {
-      ids[sat.index] = order.indexOf(sat.group);
+      if (sat.index < MAX_INSTANCES) ids[sat.index] = GROUP_ORDER.indexOf(sat.group);
     });
     return ids;
-  }, [catalog, capacity]);
+  }, [catalog]);
 
-  const palette = useMemo(
-    () =>
-      (['stations', 'brightest', 'weather', 'starlink'] as SatelliteGroup[]).map(
-        (g) => new Color(GROUP_COLORS[g]),
-      ),
-    [],
-  );
-  const selectedColor = useMemo(() => new Color(SELECTED_COLOR), []);
+  const palette = useMemo(() => GROUP_ORDER.map((g) => new Color(GROUP_COLORS[g])), []);
 
   const interpolator = useRef<Interpolator>({
-    prevAz: new Float32Array(0),
-    prevEl: new Float32Array(0),
-    curAz: new Float32Array(0),
-    curEl: new Float32Array(0),
+    prevAz: new Float32Array(MAX_INSTANCES),
+    prevEl: new Float32Array(MAX_INSTANCES),
+    curAz: new Float32Array(MAX_INSTANCES),
+    curEl: new Float32Array(MAX_INSTANCES),
     revision: -1,
     elapsed: 0,
+    colorRevision: -1,
+    colorMode: '',
+    colorSelected: null,
   });
 
   useEffect(() => {
     const mesh = meshRef.current;
     if (!mesh) return;
-    for (let i = 0; i < mesh.count; i += 1) mesh.setMatrixAt(i, zeroMatrix);
+    // Erstzuweisung legt `instanceColor` an und räumt Altlasten aus den Matrizen.
+    for (let i = 0; i < MAX_INSTANCES; i += 1) {
+      mesh.setMatrixAt(i, zeroMatrix);
+      mesh.setColorAt(i, colorScratch.setRGB(1, 1, 1));
+    }
     mesh.instanceMatrix.needsUpdate = true;
-  }, [capacity]);
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }, []);
 
   useFrame((_, delta) => {
     const mesh = meshRef.current;
     if (!mesh) return;
 
-    const count = Math.min(telemetry.count, mesh.count);
+    const count = Math.min(telemetry.count, MAX_INSTANCES);
+    mesh.count = count;
     if (count === 0) return;
 
     const state = interpolator.current;
-    ensureCapacity(state, mesh.count);
-
     const data = telemetry.data;
 
     if (state.revision !== telemetry.revision) {
@@ -128,15 +164,41 @@ export function SatelliteField({
     state.elapsed += delta * 1000;
     const t = Math.min(1, state.elapsed / tickIntervalMs);
 
-    const f = filtersRef.current;
-    const groupVisible = [f.stations, f.brightest, f.weather, f.starlink];
+    const activeMode = modeRef.current;
     const selected = selectedRef.current;
+    const size = baseSizeRef.current;
+
+    // Farben hängen nur an Telemetrie und Moduswahl, nicht an der Interpolation.
+    // Der instanceColor-Upload läuft dadurch mit 10 Hz statt mit voller Framerate.
+    const refreshColors =
+      state.colorRevision !== telemetry.revision ||
+      state.colorMode !== activeMode ||
+      state.colorSelected !== selected;
+    state.colorRevision = telemetry.revision;
+    state.colorMode = activeMode;
+    state.colorSelected = selected;
+
+    // Alle Instanzen sind bildschirmparallel – eine Quaternion für alle.
+    dummy.quaternion.copy(camera.quaternion);
+
+    let selectedVisible = false;
 
     for (let i = 0; i < count; i += 1) {
       const base = i * TELEMETRY_STRIDE;
       const elevation = state.prevEl[i] + (state.curEl[i] - state.prevEl[i]) * t;
+      const eclipsed = data[base + T_ECLIPSED] > 0.5;
+      const magnitude = data[base + T_MAG];
+      const groupId = groupIds[i];
+
       const visible =
-        elevation > 0 && groupVisible[groupIds[i]] && Number.isFinite(data[base + T_RANGE]);
+        Number.isFinite(data[base + T_RANGE]) &&
+        passesSkyFilter(
+          activeMode,
+          groupId === STARLINK_GROUP_ID,
+          elevation,
+          eclipsed,
+          magnitude,
+        );
 
       if (!visible) {
         mesh.setMatrixAt(i, zeroMatrix);
@@ -146,39 +208,61 @@ export function SatelliteField({
       const azimuth = state.prevAz[i] + angleDelta(state.curAz[i], state.prevAz[i]) * t;
       azElToVector(azimuth, elevation, SKY_RADIUS, dummy.position);
 
-      const isSelected = selected === i;
-      const eclipsed = data[base + T_ECLIPSED] > 0.5;
-      // Horizontnahe Objekte wirken kleiner – simple Atmosphären-/Distanzabschwächung.
-      const horizonFade = 0.55 + 0.45 * Math.min(1, elevation / 0.35);
-      const scale = (isSelected ? 5.4 : 2.6) * horizonFade * (eclipsed ? 0.62 : 1);
-
-      dummy.scale.setScalar(scale);
+      // Hellere Objekte wirken größer; horizontnahe werden zusätzlich gedämpft.
+      const brightnessScale = clamp(1.35 - 0.12 * (magnitude - 1), 0.6, 1.5);
+      const horizonFade = 0.6 + 0.4 * Math.min(1, elevation / 0.35);
+      dummy.scale.setScalar(size * brightnessScale * horizonFade * (eclipsed ? 0.6 : 1));
       dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
 
-      const source = isSelected ? selectedColor : palette[groupIds[i]];
-      colorScratch.copy(source);
-      if (eclipsed && !isSelected) colorScratch.multiplyScalar(ECLIPSE_FACTOR);
-      else colorScratch.multiplyScalar(0.6 + 0.4 * horizonFade);
-      mesh.setColorAt(i, colorScratch);
+      colorScratch.copy(palette[groupId]);
+      colorScratch.multiplyScalar(eclipsed ? ECLIPSE_FACTOR : 0.7 + 0.3 * horizonFade);
+      if (refreshColors) mesh.setColorAt(i, colorScratch);
+
+      if (i === selected) {
+        selectedVisible = true;
+        const ring = selectionRef.current;
+        if (ring) {
+          ring.position.copy(dummy.position);
+          ring.quaternion.copy(camera.quaternion);
+          ring.scale.setScalar(size * 2.6);
+        }
+      }
     }
 
+    if (selectionRef.current) selectionRef.current.visible = selectedVisible;
+
     mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    if (refreshColors && mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   });
 
-  if (catalog.length === 0) return null;
-
   return (
-    <instancedMesh
-      key={capacity}
-      ref={meshRef}
-      args={[undefined, undefined, capacity]}
-      frustumCulled={false}
-      renderOrder={5}
-    >
-      <icosahedronGeometry args={[1, 0]} />
-      <meshBasicMaterial toneMapped={false} transparent opacity={0.96} />
-    </instancedMesh>
+    <group>
+      <instancedMesh
+        ref={meshRef}
+        args={[geometry, undefined, MAX_INSTANCES]}
+        frustumCulled={false}
+        renderOrder={5}
+      >
+        <meshBasicMaterial
+          map={activeTexture}
+          transparent
+          depthWrite={false}
+          depthTest={false}
+          toneMapped={false}
+        />
+      </instancedMesh>
+
+      <mesh ref={selectionRef} geometry={geometry} visible={false} renderOrder={6}>
+        <meshBasicMaterial
+          map={selectionTexture}
+          color="#f472b6"
+          transparent
+          depthWrite={false}
+          depthTest={false}
+          toneMapped={false}
+        />
+      </mesh>
+    </group>
   );
 }

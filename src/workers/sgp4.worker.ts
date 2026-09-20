@@ -11,8 +11,9 @@ import { twoline2satrec } from 'satellite.js';
 import type { SatRec } from 'satellite.js';
 import { FALLBACK_TLE, HIGHLIGHT_NORAD_IDS, TLE_SOURCES } from '../data/tleSources';
 import { geoToObserverGd, normalizeAngle } from '../math/coords';
-import { predictNextPass, propagateEphemeris } from '../math/propagation';
+import { observerEciPosition, predictNextPass, propagateEphemeris } from '../math/propagation';
 import { sunEciUnitVector } from '../math/sun';
+import { standardMagnitudeFor } from '../math/visibility';
 import {
   TELEMETRY_STRIDE,
   T_ALT,
@@ -21,6 +22,7 @@ import {
   T_EL,
   T_LAT,
   T_LON,
+  T_MAG,
   T_RANGE,
   T_SPEED,
 } from '../math/telemetryLayout';
@@ -43,9 +45,15 @@ interface Entry {
 const entries: Entry[] = [];
 let observer: ObserverGd | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let timeScale = 1;
 let virtualTimeMs = Date.now();
 let lastRealMs = Date.now();
+
+/** Wartezeit, bis gedrosselte CelesTrak-Gruppen erneut versucht werden. */
+const RETRY_DELAY_MS = 5 * 60 * 1000;
+/** Hängende Verbindungen dürfen den Katalogaufbau nicht blockieren. */
+const FETCH_TIMEOUT_MS = 12_000;
 
 function post(message: WorkerResponse, transfer?: Transferable[]): void {
   ctx.postMessage(message, transfer ?? []);
@@ -92,6 +100,7 @@ function parseTle(text: string, group: SatelliteGroup, limit: number): void {
         highlight: HIGHLIGHT_NORAD_IDS.has(noradId),
         periodMin,
         inclinationDeg: (satrec.inclo * 180) / Math.PI,
+        standardMagnitude: standardMagnitudeFor(noradId, group),
       },
     });
     added += 1;
@@ -132,10 +141,14 @@ async function writeCachedTle(url: string, text: string): Promise<void> {
 async function fetchTle(source: (typeof TLE_SOURCES)[SatelliteGroup]): Promise<string> {
   let lastError = 'unbekannt';
 
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    if (attempt > 0) await sleep(1200 * attempt);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (attempt > 0) await sleep(1200);
     try {
-      const res = await fetch(source.url, { mode: 'cors', cache: 'default' });
+      const res = await fetch(source.url, {
+        mode: 'cors',
+        cache: 'default',
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
 
       if (res.status === 403 || res.status === 429) {
         const cached = await readCachedTle(source.url);
@@ -159,16 +172,33 @@ async function fetchTle(source: (typeof TLE_SOURCES)[SatelliteGroup]): Promise<s
   throw new Error(lastError);
 }
 
-async function loadCatalog(groups: SatelliteGroup[]): Promise<void> {
-  entries.length = 0;
+/**
+ * Lädt Gruppen nach. Ohne `reset` werden vorhandene Einträge beibehalten –
+ * die Telemetrie-Indizes (und damit Auswahl und Spuren im Main-Thread)
+ * bleiben dabei stabil.
+ */
+async function loadGroups(groups: SatelliteGroup[], reset: boolean): Promise<void> {
+  if (reset) {
+    entries.length = 0;
+    // Sofort etwas Sichtbares: Kernobjekte aus dem eingebauten Katalog. Sie
+    // werden verworfen, sobald die erste echte Gruppe eintrifft.
+    parseTle(FALLBACK_TLE, 'stations', 64);
+    post({ type: 'catalog', catalog: entries.map((e) => e.meta) });
+  }
   post({ type: 'status', message: 'Lade TLE-Kataloge …', loading: true });
 
-  let anySuccess = false;
+  const failed: SatelliteGroup[] = [];
+  let seedReplaced = !reset;
+
   for (const group of groups) {
     const source = TLE_SOURCES[group];
     try {
-      parseTle(await fetchTle(source), group, source.limit);
-      anySuccess = true;
+      const text = await fetchTle(source);
+      if (!seedReplaced) {
+        entries.length = 0;
+        seedReplaced = true;
+      }
+      parseTle(text, group, source.limit);
       post({
         type: 'status',
         message: `${source.label}: ${entries.length} Objekte`,
@@ -176,22 +206,40 @@ async function loadCatalog(groups: SatelliteGroup[]): Promise<void> {
       });
       post({ type: 'catalog', catalog: entries.map((e) => e.meta) });
     } catch (err) {
+      failed.push(group);
       post({
         type: 'error',
-        message: `${source.label} nicht erreichbar (${(err as Error).message})`,
+        message: `${source.label} noch nicht verfügbar – ${(err as Error).message}. Wird automatisch nachgeladen.`,
       });
     }
     // Abstand zwischen den Gruppen hält uns unter dem Rate-Limit.
     await sleep(600);
   }
 
-  if (!anySuccess || entries.length === 0) {
+  if (entries.length === 0) {
     parseTle(FALLBACK_TLE, 'stations', 64);
     post({ type: 'error', message: 'Offline-Fallback aktiv – nur Kernobjekte verfügbar.' });
   }
 
   post({ type: 'catalog', catalog: entries.map((e) => e.meta) });
   post({ type: 'status', message: `${entries.length} Objekte im Katalog`, loading: false });
+
+  // CelesTrak gibt Gruppen erst nach Ablauf des Update-Intervalls wieder frei;
+  // ein späterer Versuch holt sie nach, ohne den Nutzer zu behelligen.
+  if (failed.length > 0 && retryTimer === null) {
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      void loadGroups(failed, false);
+    }, RETRY_DELAY_MS);
+  }
+}
+
+function loadCatalog(groups: SatelliteGroup[]): Promise<void> {
+  if (retryTimer !== null) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+  return loadGroups(groups, true);
 }
 
 /* ------------------------------------------------------------------ */
@@ -207,11 +255,16 @@ function tick(): void {
 
   const date = new Date(virtualTimeMs);
   const sunUnit = sunEciUnitVector(date);
+  const observerEci = observerEciPosition(observer, date);
   const buffer = new Float32Array(entries.length * TELEMETRY_STRIDE);
 
   for (let i = 0; i < entries.length; i += 1) {
     const base = i * TELEMETRY_STRIDE;
-    const eph = propagateEphemeris(entries[i].satrec, date, observer, sunUnit);
+    const entry = entries[i];
+    const eph = propagateEphemeris(entry.satrec, date, observer, sunUnit, {
+      observerEci,
+      standardMagnitude: entry.meta.standardMagnitude,
+    });
     if (!eph) {
       buffer[base + T_EL] = -Math.PI / 2;
       buffer[base + T_RANGE] = Number.NaN;
@@ -225,6 +278,7 @@ function tick(): void {
     buffer[base + T_ECLIPSED] = eph.eclipsed ? 1 : 0;
     buffer[base + T_LAT] = eph.latitudeDeg;
     buffer[base + T_LON] = eph.longitudeDeg;
+    buffer[base + T_MAG] = eph.magnitude;
   }
 
   post({ type: 'tick', time: virtualTimeMs, count: entries.length, buffer: buffer.buffer }, [

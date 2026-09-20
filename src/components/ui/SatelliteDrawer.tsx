@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search, SlidersHorizontal, X } from 'lucide-react';
 import { RAD, compassLabel } from '../../math/coords';
+import { INVISIBLE_MAGNITUDE, passesSkyFilter } from '../../math/visibility';
 import { engine } from '../../hooks/useSatelliteEngine';
 import { readSample, requestFocus } from '../../state/runtime';
 import { useAppStore } from '../../state/store';
 import { formatNumber } from '../../utils/format';
-import type { CatalogFilters, SatelliteGroup, SatelliteMeta } from '../../types';
+import { ModeSwitch, SKY_MODES } from './ModeSwitch';
+import type { SatelliteGroup, SatelliteMeta } from '../../types';
 
 const GROUP_LABEL: Record<SatelliteGroup, string> = {
   stations: 'ISS & Stationen',
@@ -26,35 +28,12 @@ interface Row {
   elevationDeg: number;
   azimuthDeg: number;
   rangeKm: number;
+  magnitude: number;
   eclipsed: boolean;
+  matchesSky: boolean;
 }
 
-function Chip({
-  active,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  label: string;
-  onClick: () => void;
-}): React.JSX.Element {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
-        active
-          ? 'border-sky-400/60 bg-sky-400/20 text-sky-100'
-          : 'border-slate-600/50 bg-slate-800/40 text-slate-400'
-      }`}
-    >
-      {label}
-    </button>
-  );
-}
-
-/** Durchsuchbare Satellitenliste mit Filter-Chips und weicher Kamera-Anfahrt. */
+/** Durchsuchbare Satellitenliste mit Modusumschaltung und weicher Kamera-Anfahrt. */
 export function SatelliteDrawer(): React.JSX.Element {
   const drawerOpen = useAppStore((s) => s.drawerOpen);
   const setDrawerOpen = useAppStore((s) => s.setDrawerOpen);
@@ -75,40 +54,50 @@ export function SatelliteDrawer(): React.JSX.Element {
   const rows = useMemo<Row[]>(() => {
     void refreshTick;
     const query = filters.query.trim().toLowerCase();
-    const groupOn: Record<SatelliteGroup, boolean> = {
-      stations: filters.stations,
-      brightest: filters.brightest,
-      weather: filters.weather,
-      starlink: filters.starlink,
-    };
 
     const result: Row[] = [];
     for (const meta of catalog) {
-      if (!groupOn[meta.group]) continue;
       if (query && !meta.name.toLowerCase().includes(query) && !meta.noradId.includes(query)) {
         continue;
       }
+
       const sample = readSample(meta.index);
-      const elevationDeg = sample ? sample.elevation * RAD : -90;
-      if (filters.visibleOnly && elevationDeg <= 0) continue;
+      const elevationRad = sample ? sample.elevation : -Math.PI / 2;
+      const magnitude = sample ? sample.magnitude : INVISIBLE_MAGNITUDE;
+      const eclipsed = sample ? sample.eclipsed : true;
+      const matchesSky = passesSkyFilter(
+        filters.mode,
+        meta.group === 'starlink',
+        elevationRad,
+        eclipsed,
+        magnitude,
+      );
+
+      if (!matchesSky && !filters.includeBelowHorizon) continue;
+      // Auch im erweiterten Modus bleibt die Liste auf die Moduskategorie beschränkt.
+      if (!matchesSky && filters.mode === 'starlink' && meta.group !== 'starlink') continue;
+
       result.push({
         meta,
-        elevationDeg,
+        elevationDeg: elevationRad * RAD,
         azimuthDeg: sample ? sample.azimuth * RAD : 0,
         rangeKm: sample ? sample.rangeKm : Number.NaN,
-        eclipsed: sample ? sample.eclipsed : true,
+        magnitude,
+        eclipsed,
+        matchesSky,
       });
     }
 
     result.sort((a, b) => {
-      if (a.meta.highlight !== b.meta.highlight) return a.meta.highlight ? -1 : 1;
+      if (a.matchesSky !== b.matchesSky) return a.matchesSky ? -1 : 1;
+      if (filters.mode === 'nakedEye') return a.magnitude - b.magnitude;
       return b.elevationDeg - a.elevationDeg;
     });
     return result.slice(0, 400);
   }, [catalog, filters, refreshTick]);
 
-  const toggle = (key: keyof CatalogFilters) => () =>
-    setFilters({ [key]: !filters[key] } as Partial<CatalogFilters>);
+  const activeMode = SKY_MODES.find((m) => m.value === filters.mode) ?? SKY_MODES[0];
+  const visibleCount = rows.filter((r) => r.matchesSky).length;
 
   return (
     <>
@@ -131,7 +120,7 @@ export function SatelliteDrawer(): React.JSX.Element {
         <header className="flex items-center gap-2 border-b border-sky-400/20 px-3 py-3">
           <SlidersHorizontal size={16} className="text-sky-300" />
           <h2 className="flex-1 text-sm font-semibold tracking-wide text-sky-100">
-            Katalog · {rows.length} Objekte
+            {visibleCount} am Himmel
           </h2>
           <button
             type="button"
@@ -144,6 +133,10 @@ export function SatelliteDrawer(): React.JSX.Element {
         </header>
 
         <div className="space-y-2 border-b border-sky-400/10 px-3 py-2.5">
+          <ModeSwitch />
+
+          <p className="text-[10px] leading-snug text-slate-500">{activeMode.hint}</p>
+
           <label className="flex items-center gap-2 rounded-lg border border-sky-400/20 bg-sky-950/40 px-2.5 py-1.5">
             <Search size={14} className="text-sky-300/70" />
             <input
@@ -155,23 +148,24 @@ export function SatelliteDrawer(): React.JSX.Element {
             />
           </label>
 
-          <div className="flex flex-wrap gap-1.5">
-            <Chip
-              active={filters.visibleOnly}
-              label="Nur Sichtbare"
-              onClick={toggle('visibleOnly')}
-            />
-            <Chip active={filters.stations} label={GROUP_LABEL.stations} onClick={toggle('stations')} />
-            <Chip active={filters.brightest} label={GROUP_LABEL.brightest} onClick={toggle('brightest')} />
-            <Chip active={filters.weather} label={GROUP_LABEL.weather} onClick={toggle('weather')} />
-            <Chip active={filters.starlink} label={GROUP_LABEL.starlink} onClick={toggle('starlink')} />
-          </div>
+          <button
+            type="button"
+            aria-pressed={filters.includeBelowHorizon}
+            onClick={() => setFilters({ includeBelowHorizon: !filters.includeBelowHorizon })}
+            className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
+              filters.includeBelowHorizon
+                ? 'border-sky-400/60 bg-sky-400/20 text-sky-100'
+                : 'border-slate-600/50 bg-slate-800/40 text-slate-400'
+            }`}
+          >
+            Auch nicht sichtbare listen
+          </button>
         </div>
 
         <ul className="no-scrollbar flex-1 overflow-y-auto overscroll-contain">
           {rows.length === 0 && (
             <li className="px-4 py-8 text-center text-xs text-slate-500">
-              Keine Objekte entsprechen den Filtern.
+              Aktuell entspricht kein Objekt diesem Filter.
             </li>
           )}
           {rows.map((row) => (
@@ -187,7 +181,7 @@ export function SatelliteDrawer(): React.JSX.Element {
                 }}
                 className={`flex w-full items-center gap-2.5 border-b border-slate-800/60 px-3 py-2.5 text-left transition ${
                   selectedIndex === row.meta.index ? 'bg-sky-400/10' : 'hover:bg-sky-400/5'
-                }`}
+                } ${row.matchesSky ? '' : 'opacity-45'}`}
               >
                 <span
                   className={`h-2 w-2 shrink-0 rounded-full ${GROUP_DOT[row.meta.group]} ${
@@ -199,8 +193,10 @@ export function SatelliteDrawer(): React.JSX.Element {
                     {row.meta.name}
                   </span>
                   <span className="block text-[10px] text-slate-400">
-                    NORAD {row.meta.noradId} · {GROUP_LABEL[row.meta.group]}
-                    {row.eclipsed ? ' · Erdschatten' : ''}
+                    {GROUP_LABEL[row.meta.group]}
+                    {row.magnitude < INVISIBLE_MAGNITUDE
+                      ? ` · ${formatNumber(row.magnitude, 1)} mag`
+                      : ' · Erdschatten'}
                   </span>
                 </span>
                 <span className="shrink-0 text-right">

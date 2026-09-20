@@ -7,6 +7,7 @@ import {
   T_EL,
   T_LAT,
   T_LON,
+  T_MAG,
   T_RANGE,
   T_SPEED,
 } from '../math/telemetryLayout';
@@ -44,6 +45,7 @@ export interface SatelliteSample {
   eclipsed: boolean;
   latitudeDeg: number;
   longitudeDeg: number;
+  magnitude: number;
 }
 
 /** Liest einen Telemetrie-Datensatz. Gibt `null` zurück, wenn der Index leer ist. */
@@ -63,6 +65,7 @@ export function readSample(index: number, out?: SatelliteSample): SatelliteSampl
   target.eclipsed = d[base + T_ECLIPSED] > 0.5;
   target.latitudeDeg = d[base + T_LAT];
   target.longitudeDeg = d[base + T_LON];
+  target.magnitude = d[base + T_MAG];
   return target;
 }
 

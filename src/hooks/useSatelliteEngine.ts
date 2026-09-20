@@ -93,10 +93,15 @@ export function useSatelliteEngine({ intervalMs = 100 }: EngineOptions = {}): vo
   useEffect(() => {
     if (!observer) return;
     send({ type: 'observer', observer });
-    send({ type: 'load', groups: activeGroups });
     if (!started.current) {
       send({ type: 'start', intervalMs });
       started.current = true;
     }
-  }, [observer, activeGroups, intervalMs]);
+  }, [observer, intervalMs]);
+
+  // Strikt getrennt vom Standort-Effekt: ein Katalog-Reload verwirft im Worker
+  // alle Satelliten und darf deshalb nicht an jedem GPS-Fix hängen.
+  useEffect(() => {
+    send({ type: 'load', groups: activeGroups });
+  }, [activeGroups]);
 }

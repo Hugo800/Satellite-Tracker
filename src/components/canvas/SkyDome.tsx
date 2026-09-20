@@ -16,12 +16,10 @@ const fragmentShader = /* glsl */ `
   precision highp float;
 
   uniform vec3 uSunDir;
-  uniform float uSunAltDeg;
-  uniform float uDaylight;
 
   varying vec3 vDir;
 
-  // Ordered-Dither gegen Banding in den weichen Dämmerungsverläufen.
+  // Ordered-Dither gegen Banding in den weichen Verläufen.
   float dither(vec2 co) {
     return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
   }
@@ -31,32 +29,28 @@ const fragmentShader = /* glsl */ `
     float h = clamp(dir.y, -1.0, 1.0);
     float horizonWeight = pow(clamp(1.0 - h, 0.0, 1.0), 2.2);
 
-    vec3 dayZenith   = vec3(0.075, 0.275, 0.700);
-    vec3 dayHorizon  = vec3(0.540, 0.720, 0.930);
-    vec3 nightZenith = vec3(0.0035, 0.0070, 0.0230);
-    vec3 nightHorizon= vec3(0.0220, 0.0380, 0.0820);
+    vec3 zenith  = vec3(0.0035, 0.0070, 0.0230);
+    vec3 horizon = vec3(0.0220, 0.0380, 0.0820);
+    vec3 color = mix(zenith, horizon, horizonWeight);
 
-    vec3 dayColor   = mix(dayZenith, dayHorizon, horizonWeight);
-    vec3 nightColor = mix(nightZenith, nightHorizon, horizonWeight);
-    vec3 color = mix(nightColor, dayColor, uDaylight);
-
-    // Dämmerungsglühen: maximal wenn die Sonne 4° unter dem Horizont steht.
-    float twilight = exp(-pow((uSunAltDeg + 4.0) / 9.0, 2.0));
+    // Dezenter Schein um die Sonnenrichtung – unabhängig von der Tageszeit,
+    // damit der Himmel immer dunkel genug für Satelliten bleibt.
     float sunProximity = max(dot(dir, normalize(uSunDir)), 0.0);
-    vec3 glow = mix(vec3(0.98, 0.36, 0.11), vec3(1.0, 0.74, 0.38), uDaylight);
+    color += vec3(0.55, 0.30, 0.12) * pow(sunProximity, 6.0) * 0.5;
 
-    color += glow * pow(sunProximity, 4.0) * twilight * 1.1;
-    color += glow * pow(max(0.0, 1.0 - abs(h) * 7.0), 3.0) * twilight * 0.28;
-
-    // Schwaches Airglow-Band knapp über dem Horizont in der Nacht.
-    color += vec3(0.02, 0.05, 0.04) * (1.0 - uDaylight) * pow(max(0.0, 1.0 - abs(h) * 10.0), 2.0);
+    // Schwaches Airglow-Band knapp über dem Horizont.
+    color += vec3(0.02, 0.05, 0.04) * pow(max(0.0, 1.0 - abs(h) * 10.0), 2.0);
 
     color += (dither(gl_FragCoord.xy) - 0.5) / 255.0;
     gl_FragColor = vec4(color, 1.0);
   }
 `;
 
-/** Invertierte Himmelskugel mit dynamischem Tag-/Dämmerungs-/Nachtverlauf. */
+/**
+ * Invertierte Himmelskugel. Bewusst immer im Nachtverlauf: Die App trennt
+ * nicht zwischen Tag und Nacht, damit jederzeit alle Objekte am Himmel
+ * erkennbar bleiben.
+ */
 export function SkyDome({ radius = 520 }: { radius?: number }): React.JSX.Element {
   const materialRef = useRef<ShaderMaterial>(null);
   const sun = useAppStore((s) => s.sun);
@@ -64,8 +58,6 @@ export function SkyDome({ radius = 520 }: { radius?: number }): React.JSX.Elemen
   const uniforms = useMemo(
     () => ({
       uSunDir: { value: new Vector3(0, -1, 0) },
-      uSunAltDeg: { value: -18 },
-      uDaylight: { value: 0 },
     }),
     [],
   );
@@ -74,8 +66,6 @@ export function SkyDome({ radius = 520 }: { radius?: number }): React.JSX.Elemen
     const material = materialRef.current;
     if (!material) return;
     azElToVector(sun.azimuthDeg * DEG, sun.altitudeDeg * DEG, 1, material.uniforms.uSunDir.value);
-    material.uniforms.uSunAltDeg.value = sun.altitudeDeg;
-    material.uniforms.uDaylight.value = sun.daylight;
   }, [sun]);
 
   return (

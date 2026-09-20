@@ -47,6 +47,8 @@ export interface Ephemeris extends LookAngles {
   speedKmS: number;
   /** true, wenn der Satellit im Erdschatten steht (nicht von der Sonne angestrahlt). */
   eclipsed: boolean;
+  /** Scheinbare visuelle Helligkeit; große Werte = unsichtbar. */
+  magnitude: number;
 }
 
 export type SatelliteGroup = 'stations' | 'brightest' | 'starlink' | 'weather';
@@ -64,6 +66,8 @@ export interface SatelliteMeta {
   periodMin: number;
   /** Bahnneigung in Grad. */
   inclinationDeg: number;
+  /** Helligkeit bei 1000 km und vollem Phasenwinkel. */
+  standardMagnitude: number;
 }
 
 /** Vorhersage eines Überflugs. */
@@ -84,15 +88,18 @@ export interface PassPrediction {
   visible: boolean;
 }
 
-/** Dämmerungsphase am Beobachterstandort. */
-export type SkyPhase = 'day' | 'civil' | 'nautical' | 'astronomical' | 'night';
-
+/** Topozentrische Position der Sonne am Beobachterstandort. */
 export interface SunState {
   altitudeDeg: number;
   azimuthDeg: number;
-  phase: SkyPhase;
-  /** 0 = tiefe Nacht, 1 = Tag – für Shader-Blending. */
-  daylight: number;
+}
+
+/** Topozentrische Position des Mondes samt Beleuchtungsgrad. */
+export interface MoonState {
+  altitudeDeg: number;
+  azimuthDeg: number;
+  /** Beleuchteter Anteil der Mondscheibe: 0 = Neumond, 1 = Vollmond. */
+  illumination: number;
 }
 
 /**
@@ -102,13 +109,19 @@ export interface SunState {
  */
 export type CompassStatus = 'unknown' | 'ok' | 'calibrating' | 'relative';
 
+/**
+ * Darstellungsmodus des Himmels:
+ * - `all`      – jedes Katalogobjekt über dem Horizont
+ * - `nakedEye` – nur, was realistisch mit bloßem Auge zu sehen ist
+ * - `starlink` – ausschließlich Starlink
+ */
+export type SkyFilterMode = 'all' | 'nakedEye' | 'starlink';
+
 /** Aktive Filter der Satellitenliste. */
 export interface CatalogFilters {
-  visibleOnly: boolean;
-  stations: boolean;
-  brightest: boolean;
-  starlink: boolean;
-  weather: boolean;
+  mode: SkyFilterMode;
+  /** In der Liste auch Objekte unter dem Horizont zeigen. */
+  includeBelowHorizon: boolean;
   query: string;
 }
 

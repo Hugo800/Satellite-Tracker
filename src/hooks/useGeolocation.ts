@@ -1,38 +1,64 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useAppStore } from '../state/store';
+import type { GeoCoord } from '../types';
 
 /** Fallback, falls der Nutzer die Ortung ablehnt (Greenwich-nahe Mitteleuropa-Referenz). */
-export const DEFAULT_OBSERVER = {
-  latitudeDeg: 52.5200,
-  longitudeDeg: 13.4050,
+export const DEFAULT_OBSERVER: GeoCoord = {
+  latitudeDeg: 52.52,
+  longitudeDeg: 13.405,
   altitudeKm: 0.04,
 };
 
 /**
+ * Ab dieser Verschiebung wird der Standort übernommen.
+ *
+ * Für Objekte in 500–40 000 km Höhe ändert sich die Blickrichtung unterhalb
+ * dieser Schwelle um deutlich weniger als ein Grad. Jedes übernommene Update
+ * stößt dagegen Effekte in der gesamten App an – `watchPosition` feuert auf
+ * Mobilgeräten sekündlich.
+ */
+const MIN_MOVE_METERS = 200;
+
+function distanceMeters(a: GeoCoord, b: GeoCoord): number {
+  const latMeters = (a.latitudeDeg - b.latitudeDeg) * 111_320;
+  const lonMeters =
+    (a.longitudeDeg - b.longitudeDeg) * 111_320 * Math.cos((a.latitudeDeg * Math.PI) / 180);
+  return Math.hypot(latMeters, lonMeters);
+}
+
+/**
  * Beobachterstandort per Geolocation-API. Setzt beim ersten Fix den Store und
- * folgt danach Positionsänderungen (wichtig für mobile Nutzung im Feld).
+ * folgt danach nur noch nennenswerten Positionsänderungen.
  */
 export function useGeolocation(): void {
   const setObserver = useAppStore((s) => s.setObserver);
   const setGeoError = useAppStore((s) => s.setGeoError);
+  const lastAccepted = useRef<GeoCoord | null>(null);
 
   useEffect(() => {
+    const accept = (next: GeoCoord) => {
+      const previous = lastAccepted.current;
+      if (previous && distanceMeters(previous, next) < MIN_MOVE_METERS) return;
+      lastAccepted.current = next;
+      setObserver(next);
+    };
+
     if (!('geolocation' in navigator)) {
       setGeoError('Geolocation nicht verfügbar – Standardstandort aktiv.');
-      setObserver(DEFAULT_OBSERVER);
+      accept(DEFAULT_OBSERVER);
       return;
     }
 
     let settled = false;
     const fallbackTimer = window.setTimeout(() => {
-      if (!settled) setObserver(DEFAULT_OBSERVER);
+      if (!settled) accept(DEFAULT_OBSERVER);
     }, 8000);
 
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
         settled = true;
         window.clearTimeout(fallbackTimer);
-        setObserver({
+        accept({
           latitudeDeg: position.coords.latitude,
           longitudeDeg: position.coords.longitude,
           altitudeKm: (position.coords.altitude ?? 40) / 1000,
@@ -42,9 +68,10 @@ export function useGeolocation(): void {
         settled = true;
         window.clearTimeout(fallbackTimer);
         setGeoError(`Ortung fehlgeschlagen (${error.message}) – Standardstandort aktiv.`);
-        setObserver(DEFAULT_OBSERVER);
+        accept(DEFAULT_OBSERVER);
       },
-      { enableHighAccuracy: true, maximumAge: 30_000, timeout: 15_000 },
+      // Meterpräzision bringt hier nichts, kostet aber Akku und erzeugt Update-Sturm.
+      { enableHighAccuracy: false, maximumAge: 120_000, timeout: 15_000 },
     );
 
     return () => {

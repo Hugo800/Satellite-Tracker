@@ -4,6 +4,7 @@ import { OrbitControls } from '@react-three/drei';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { PerspectiveCamera } from 'three';
 import { RAD, angleDelta, clamp, normalizeAngle } from '../../math/coords';
+import { clampPitch } from '../../math/orientation';
 import { orientationState, viewState } from '../../state/runtime';
 import { useAppStore } from '../../state/store';
 
@@ -100,6 +101,8 @@ export function CameraRig(): React.JSX.Element {
       // Leichtes Slerp glättet den Restjitter der Sensorfusion; die Kursmittelung
       // selbst passiert bereits in useDeviceOrientation.
       camera.quaternion.slerp(orientationState.quaternion, Math.min(1, delta * 9));
+      // Auch der Zwischenschritt der Interpolation bleibt über dem Horizont.
+      clampPitch(camera.quaternion);
     } else if (controls && viewState.focus) {
       const targetTheta = -viewState.focus.azimuth;
       const targetPhi = clamp(Math.PI / 2 + viewState.focus.elevation, 0.02, Math.PI - 0.02);

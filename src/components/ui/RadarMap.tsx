@@ -1,5 +1,13 @@
 import { useEffect, useRef } from 'react';
-import { TELEMETRY_STRIDE, T_AZ, T_ECLIPSED, T_EL, T_RANGE } from '../../math/telemetryLayout';
+import {
+  TELEMETRY_STRIDE,
+  T_AZ,
+  T_ECLIPSED,
+  T_EL,
+  T_MAG,
+  T_RANGE,
+} from '../../math/telemetryLayout';
+import { passesSkyFilter } from '../../math/visibility';
 import { telemetry, viewState } from '../../state/runtime';
 import { useAppStore } from '../../state/store';
 import type { SatelliteGroup } from '../../types';
@@ -23,14 +31,14 @@ const GROUP_COLORS: Record<SatelliteGroup, string> = {
 export function RadarMap(): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const catalog = useAppStore((s) => s.catalog);
-  const filters = useAppStore((s) => s.filters);
+  const mode = useAppStore((s) => s.filters.mode);
   const selectedIndex = useAppStore((s) => s.selectedIndex);
 
   const catalogRef = useRef(catalog);
-  const filtersRef = useRef(filters);
+  const modeRef = useRef(mode);
   const selectedRef = useRef(selectedIndex);
   catalogRef.current = catalog;
-  filtersRef.current = filters;
+  modeRef.current = mode;
   selectedRef.current = selectedIndex;
 
   useEffect(() => {
@@ -103,28 +111,33 @@ export function RadarMap(): React.JSX.Element {
 
       // Satelliten
       const data = telemetry.data;
-      const f = filtersRef.current;
-      const visibleGroups: Record<SatelliteGroup, boolean> = {
-        stations: f.stations,
-        brightest: f.brightest,
-        weather: f.weather,
-        starlink: f.starlink,
-      };
+      const activeMode = modeRef.current;
       const selected = selectedRef.current;
 
       for (const sat of catalogRef.current) {
-        if (!visibleGroups[sat.group]) continue;
         if (sat.index >= telemetry.count) continue;
         const base = sat.index * TELEMETRY_STRIDE;
-        const elevationDeg = (data[base + T_EL] * 180) / Math.PI;
-        if (elevationDeg <= 0 || !Number.isFinite(data[base + T_RANGE])) continue;
+        const elevation = data[base + T_EL];
+        const eclipsed = data[base + T_ECLIPSED] > 0.5;
+        if (!Number.isFinite(data[base + T_RANGE])) continue;
+        if (
+          !passesSkyFilter(
+            activeMode,
+            sat.group === 'starlink',
+            elevation,
+            eclipsed,
+            data[base + T_MAG],
+          )
+        ) {
+          continue;
+        }
 
+        const elevationDeg = (elevation * 180) / Math.PI;
         const azimuthDeg = (data[base + T_AZ] * 180) / Math.PI;
         const r = (1 - elevationDeg / 90) * radius;
         const x = cx + r * Math.sin((azimuthDeg * Math.PI) / 180);
         const y = cy - r * Math.cos((azimuthDeg * Math.PI) / 180);
         const isSelected = selected === sat.index;
-        const eclipsed = data[base + T_ECLIPSED] > 0.5;
 
         ctx.beginPath();
         ctx.arc(x, y, isSelected ? 3.6 : sat.highlight ? 2.8 : 1.6, 0, Math.PI * 2);

@@ -2,7 +2,9 @@ import {
   propagate,
   gstime,
   eciToEcf,
+  ecfToEci,
   eciToGeodetic,
+  geodeticToEcf,
   ecfToLookAngles,
   degreesLat,
   degreesLong,
@@ -11,10 +13,22 @@ import type { SatRec } from 'satellite.js';
 import type { Ephemeris, ObserverGd, PassPrediction, Vec3 } from '../types';
 import { RAD, normalizeAngle } from './coords';
 import { isEclipsed, sunEciUnitVector } from './sun';
+import { INVISIBLE_MAGNITUDE, apparentMagnitude, phaseAngle } from './visibility';
 
 interface RawPv {
   position?: Vec3 | false | null;
   velocity?: Vec3 | false | null;
+}
+
+/** Beobachterposition im inertialen Frame – Basis für den Phasenwinkel. */
+export function observerEciPosition(observer: ObserverGd, date: Date): Vec3 {
+  const ecf = geodeticToEcf(observer as never) as unknown as Vec3;
+  return ecfToEci(ecf as never, gstime(date)) as unknown as Vec3;
+}
+
+export interface MagnitudeContext {
+  observerEci: Vec3;
+  standardMagnitude: number;
 }
 
 /**
@@ -26,6 +40,7 @@ export function propagateEphemeris(
   date: Date,
   observer: ObserverGd,
   sunUnit: Vec3 = sunEciUnitVector(date),
+  magnitudeContext?: MagnitudeContext,
 ): Ephemeris | null {
   let pv: RawPv;
   try {
@@ -55,9 +70,22 @@ export function propagateEphemeris(
   const vel: Vec3 =
     velocityEci && typeof velocityEci === 'object' ? velocityEci : { x: 0, y: 0, z: 0 };
 
+  const eclipsed = isEclipsed(positionEci, sunUnit);
+  const elevation = look.elevation;
+
+  let magnitude = INVISIBLE_MAGNITUDE;
+  if (!eclipsed && magnitudeContext) {
+    magnitude = apparentMagnitude(
+      magnitudeContext.standardMagnitude,
+      look.rangeSat,
+      phaseAngle(positionEci, magnitudeContext.observerEci, sunUnit),
+      elevation,
+    );
+  }
+
   return {
     azimuth: normalizeAngle(look.azimuth),
-    elevation: look.elevation,
+    elevation,
     rangeKm: look.rangeSat,
     positionEci,
     velocityEci: vel,
@@ -65,7 +93,8 @@ export function propagateEphemeris(
     longitudeDeg: degreesLong(geo.longitude),
     altitudeKm: geo.height,
     speedKmS: Math.hypot(vel.x, vel.y, vel.z),
-    eclipsed: isEclipsed(positionEci, sunUnit),
+    eclipsed,
+    magnitude,
   };
 }
 

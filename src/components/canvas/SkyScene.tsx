@@ -1,10 +1,12 @@
 import { Canvas } from '@react-three/fiber';
 import { AdaptiveDpr, Preload } from '@react-three/drei';
 import { CameraRig } from './CameraRig';
+import { CelestialBodies } from './CelestialBodies';
 import { HighlightMarkers } from './HighlightMarkers';
 import { HorizonGrid } from './HorizonGrid';
 import { OrbitTrail } from './OrbitTrail';
 import { SatelliteField } from './SatelliteField';
+import { SatelliteTrails } from './SatelliteTrails';
 import { SkyDome } from './SkyDome';
 import { Starfield } from './Starfield';
 import { TapPicker } from './TapPicker';
@@ -30,7 +32,9 @@ export function SkyScene(): React.JSX.Element {
     >
       <SkyDome />
       <Starfield />
+      <CelestialBodies />
       <HorizonGrid />
+      <SatelliteTrails />
       <SatelliteField />
       <HighlightMarkers />
       <OrbitTrail />

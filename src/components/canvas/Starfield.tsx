@@ -9,7 +9,6 @@ import {
   ShaderMaterial,
   Vector3,
 } from 'three';
-import { useAppStore } from '../../state/store';
 
 const STAR_COUNT = 5200;
 const STAR_RADIUS = 500;
@@ -47,7 +46,6 @@ const vertexShader = /* glsl */ `
   attribute vec3 aColor;
 
   uniform float uTime;
-  uniform float uDaylight;
   uniform float uPixelRatio;
   uniform float uFovScale;
 
@@ -62,7 +60,7 @@ const vertexShader = /* glsl */ `
     float horizonBoost = 1.0 - smoothstep(0.0, 0.55, max(altitude, 0.0));
     float twinkle = 1.0 + (0.08 + 0.26 * horizonBoost) * sin(uTime * 2.7 + aPhase * 8.0);
 
-    vAlpha = clamp(1.0 - uDaylight * 1.25, 0.0, 1.0) * twinkle;
+    vAlpha = twinkle;
 
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mvPosition;
@@ -94,9 +92,6 @@ const fragmentShader = /* glsl */ `
  */
 export function Starfield(): React.JSX.Element {
   const materialRef = useRef<ShaderMaterial>(null);
-  const daylightRef = useRef(0);
-  const daylight = useAppStore((s) => s.sun.daylight);
-  daylightRef.current = daylight;
 
   const geometry = useMemo(() => {
     const positions = new Float32Array(STAR_COUNT * 3);
@@ -152,7 +147,6 @@ export function Starfield(): React.JSX.Element {
   const uniforms = useMemo(
     () => ({
       uTime: { value: 0 },
-      uDaylight: { value: 0 },
       uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
       uFovScale: { value: 1 },
     }),
@@ -163,9 +157,6 @@ export function Starfield(): React.JSX.Element {
     const material = materialRef.current;
     if (!material) return;
     material.uniforms.uTime.value += delta;
-    // Sanftes Nachziehen verhindert harte Sprünge beim Dämmerungs-Update.
-    const current = material.uniforms.uDaylight.value as number;
-    material.uniforms.uDaylight.value = current + (daylightRef.current - current) * delta * 1.5;
     const fov = (state.camera as { fov?: number }).fov ?? 70;
     material.uniforms.uFovScale.value = Math.min(2.4, 70 / fov);
   });

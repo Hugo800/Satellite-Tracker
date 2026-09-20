@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { Euler, Quaternion, Vector3 } from 'three';
 import { DEG, RAD, angleDelta, clamp, normalizeAngle } from '../math/coords';
+import { AR_MIN_ELEVATION, clampPitch } from '../math/orientation';
 import { orientationState } from '../state/runtime';
 import { useAppStore } from '../state/store';
 import type { CompassStatus } from '../types';
@@ -14,8 +15,6 @@ type PermissionCapableCtor = typeof DeviceOrientationEvent & {
   requestPermission?: () => Promise<'granted' | 'denied' | 'default'>;
 };
 
-/** Tiefster Blickwinkel im AR-Modus – darunter rastet die Ansicht ein. */
-const AR_MIN_ELEVATION = -6 * DEG;
 /** Ab hier zeigt das Gerät nahezu senkrecht; der Azimut ist dort entartet. */
 const NEAR_VERTICAL = 0.97;
 /** iOS meldet die Kompassgüte in Grad; darüber gilt er als unkalibriert. */
@@ -35,9 +34,6 @@ const Q0 = new Quaternion();
 const Q1 = new Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
 
 const forward = new Vector3();
-const upVector = new Vector3();
-const pitchAxis = new Vector3();
-const pitchFix = new Quaternion();
 const candidate = new Quaternion();
 
 /**
@@ -67,33 +63,6 @@ function readScreenAngle(): number {
   const screenAngle = typeof screen !== 'undefined' ? screen.orientation?.angle : undefined;
   const legacyAngle = (window as unknown as { orientation?: number }).orientation;
   return (screenAngle ?? legacyAngle ?? 0) * DEG;
-}
-
-/**
- * Begrenzt die Blickrichtung nach unten, ohne Kurs und Rollwinkel zu verfälschen.
- *
- * Gedreht wird um die Normale der Vertikalebene der Blickrichtung – *nicht* um
- * die lokale X-Achse der Kamera, die im Querformat schräg steht und dabei den
- * Azimut mitziehen würde. Unterhalb der Grenze steht das Bild still, statt in
- * die Bodenebene zu kippen.
- */
-function clampPitch(q: Quaternion, minElevation: number): void {
-  forward.set(0, 0, -1).applyQuaternion(q);
-  const horizontal = Math.hypot(forward.x, forward.z);
-  const elevation = Math.atan2(forward.y, horizontal);
-  if (elevation >= minElevation) return;
-
-  if (horizontal > 1e-4) {
-    pitchAxis.set(-forward.z, 0, forward.x);
-  } else {
-    // Exakt senkrechter Blick: Kurs aus der Bildschirm-Oben-Richtung ableiten.
-    upVector.set(0, 1, 0).applyQuaternion(q);
-    pitchAxis.set(-upVector.z, 0, upVector.x);
-  }
-  if (pitchAxis.lengthSq() < 1e-8) return;
-
-  pitchFix.setFromAxisAngle(pitchAxis.normalize(), minElevation - elevation);
-  q.premultiply(pitchFix);
 }
 
 export interface DeviceOrientationApi {
