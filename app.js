@@ -352,9 +352,13 @@ const TLEModule = {
         counts[tag] = (counts[tag] || 0) + 1;
 
         // CRITICAL PERFORMANCE FIX: Starlink has >6000 satellites.
-        // Rendering/propagating all of them drops FPS to zero on mobile.
-        if (tag === 'starlink' && counts[tag] > 200) continue;
-        if (counts[tag] > 400) continue; // Safety limit for other huge groups
+        // To show a realistic sky, we sample every 20th satellite 
+        // instead of just taking the first 200 (which are all in one old orbit).
+        if (tag === 'starlink') {
+          if (counts[tag] % 25 !== 0) continue; // Take ~1 in 25 (yields ~240 out of 6000)
+          if (counts[tag] > 10000) continue; // Hard cap
+        }
+        if (counts[tag] > 400 && tag !== 'starlink') continue; // Safety limit for other huge groups
 
         const satrec = satellite.twoline2satrec(raw.l1, raw.l2);
         if (satrec.error !== 0) continue;
