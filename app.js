@@ -94,7 +94,6 @@ const State = {
   // Gyroscope offset
   gyroEnabled: false,
   gyroAzOffset: 0,
-  mapMode: false,
   gyroAz:  0,
   gyroEl:  90,
 
@@ -1870,17 +1869,9 @@ const App = {
     // Init renderers
     SkyRenderer.init();
     RadarRenderer.init();
-    MapRenderer.init();
 
     // Init UI
     UIModule.init();
-
-    document.getElementById('btnToggleMap').addEventListener('click', () => {
-      State.mapMode = !State.mapMode;
-      document.body.classList.toggle('map-view', State.mapMode);
-      MapRenderer.active = State.mapMode;
-      if (State.mapMode) MapRenderer.resize();
-    });
 
     // Init touch/mouse
     TouchModule.init(document.getElementById('skyCanvas'));
@@ -1911,7 +1902,6 @@ const App = {
     // Always render
     SkyRenderer.draw();
     RadarRenderer.draw();
-    MapRenderer.draw();
   },
 
   _registerSW() {
@@ -1925,104 +1915,3 @@ const App = {
 
 
 
-const MapRenderer = {
-  canvas: null, ctx: null, geoData: null,
-  active: false,
-
-  async init() {
-    this.canvas = document.getElementById('mapCanvas');
-    this.ctx = this.canvas.getContext('2d');
-    try {
-      const res = await fetch('map.json');
-      this.geoData = await res.json();
-    } catch(e) { console.error("Map load failed"); }
-    window.addEventListener('resize', () => this.resize());
-    this.resize();
-  },
-
-  resize() {
-    const dpr = devicePixelRatio || 1;
-    this.canvas.width = window.innerWidth * dpr;
-    this.canvas.height = window.innerHeight * dpr;
-    this.canvas.style.width = window.innerWidth + 'px';
-    this.canvas.style.height = window.innerHeight + 'px';
-    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  },
-
-  draw() {
-    if (!this.active || !this.geoData) return;
-    const ctx = this.ctx;
-    const W = window.innerWidth, H = window.innerHeight;
-    
-    ctx.fillStyle = State.nightMode ? '#0a0000' : '#020408';
-    ctx.fillRect(0, 0, W, H);
-
-    ctx.strokeStyle = State.nightMode ? 'rgba(255, 60, 0, 0.2)' : 'rgba(0, 200, 255, 0.2)';
-    ctx.lineWidth = 1;
-    
-    // Draw map
-    ctx.beginPath();
-    for (const feature of this.geoData.features) {
-      if (feature.geometry.type === 'Polygon') {
-        this._drawPoly(feature.geometry.coordinates, W, H, ctx);
-      } else if (feature.geometry.type === 'MultiPolygon') {
-        for (const poly of feature.geometry.coordinates) {
-          this._drawPoly(poly, W, H, ctx);
-        }
-      }
-    }
-    ctx.stroke();
-
-    // Draw satellites
-    for (const sat of State.filteredSats) {
-      if (!sat.computed || sat.computed.lat === undefined) continue;
-      
-      let lon = sat.computed.lon;
-      let lat = sat.computed.lat;
-      
-      const x = (lon + 180) / 360 * W;
-      const y = (90 - lat) / 180 * H;
-
-      const isSelected = State.selectedSat === sat;
-      const color = isSelected ? '#00ff88' : (State.nightMode ? '#ff4400' : 'rgba(0, 230, 255, 0.6)');
-      
-      ctx.beginPath();
-      ctx.arc(x, y, isSelected ? 4 : 1.5, 0, Math.PI*2);
-      ctx.fillStyle = color;
-      ctx.fill();
-
-      // Draw footprint for selected
-      if (isSelected) {
-        ctx.beginPath();
-        const fpRadius = W * (sat.computed.alt / 6371) * 0.15; // rough footprint estimation
-        ctx.arc(x, y, fpRadius, 0, Math.PI*2);
-        ctx.fillStyle = 'rgba(0, 255, 136, 0.1)';
-        ctx.fill();
-        
-        ctx.fillStyle = color;
-        ctx.font = '12px sans-serif';
-        ctx.fillText(sat.name.substring(0,15), x + 8, y + 4);
-      }
-    }
-  },
-
-  _drawPoly(coords, W, H, ctx) {
-    for (const ring of coords) {
-      for (let i = 0; i < ring.length; i++) {
-        const [lon, lat] = ring[i];
-        const x = (lon + 180) / 360 * W;
-        const y = (90 - lat) / 180 * H;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-    }
-  }
-};
-
-
-/* ── Bootstrap ─────────────────────────────────────────────── */
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => App.init());
-} else {
-  App.init();
-}

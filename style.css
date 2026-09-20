@@ -74,19 +74,10 @@ html, body {
 }
 #skyCanvas:active { cursor: grabbing; }
 
-#mapCanvas {
-  display: none;
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 1;
-  background: var(--bg);
-}
-#mapCanvas.active { display: block; }
 
-body.map-view #skyCanvas, body.map-view #radarContainer { display: none; }
-body.map-view #mapCanvas { display: block; }
+
+
+
 
 /* ── Top Bar ────────────────────────────────────────────────── */
 #topBar {
