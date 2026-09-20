@@ -63,7 +63,7 @@ const CONFIG = {
       l2: '2 27386  98.5483 319.0000 0001000 100.0000 260.0000 14.37805000000000' },
   ],
   UPDATE_INTERVAL_MS:  1000,       // propagation update rate
-  TLE_CACHE_KEY:       'sattracker_tle_cache_v2',
+  TLE_CACHE_KEY:       'sattracker_tle_cache_v3',
   TLE_CACHE_TTL_MS:    4 * 60 * 60 * 1000,  // 4 hours
   TRAIL_POINTS:        40,          // orbit trail history
   TRAIL_STEP_MS:       15000,       // 15 s between trail points
