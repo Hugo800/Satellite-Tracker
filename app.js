@@ -1526,34 +1526,37 @@ const UIModule = {
       else sats = sats.filter(s => s.tag === State.activeFilter);
     }
     State.filteredSats = sats;
-    this.renderSatList();
+    // Only do a full rebuild when the set of satellites changes
+    this._fullRenderSatList();
   },
 
-  renderSatList() {
+  /** Full rebuild – called only on filter/search changes */
+  _fullRenderSatList() {
     const ul = document.getElementById('satList');
-    const html = State.filteredSats
+    const sorted = State.filteredSats
       .sort((a, b) => b.computed.el - a.computed.el)
-      .slice(0, 150)  // cap for performance
-      .map(sat => {
-        const vis = sat.computed.visible;
-        const above = sat.computed.el > 0;
-        const dotClass = vis ? 'sat-dot--visible' : (above ? 'sat-dot--above' : 'sat-dot--below');
-        const elStr    = sat.computed.el > -90 ? sat.computed.el.toFixed(1) + '°' : '—';
-        const azStr    = sat.computed.az ? sat.computed.az.toFixed(0) + '°' : '—';
-        const isSelected = State.selectedSat === sat;
+      .slice(0, 150);
 
-        return `<li class="sat-item${isSelected ? ' selected' : ''}" data-name="${sat.name}" role="option" aria-selected="${isSelected}">
-          <span class="sat-item__dot ${dotClass}"></span>
-          <div class="sat-item__info">
-            <div class="sat-item__name">${sat.name}</div>
-            <div class="sat-item__sub">${Utils.azToCardinal(sat.computed.az)} ${azStr} · ${sat.tag.toUpperCase()}${vis ? ' · <span class="vis-badge">SICHTBAR</span>' : ''}</div>
-          </div>
-          <div class="sat-item__right">
-            <span class="sat-item__el">${elStr}</span>
-            ${above ? Utils.qualityBars(sat.computed.el >= 60 ? 5 : sat.computed.el >= 40 ? 4 : sat.computed.el >= 20 ? 3 : sat.computed.el >= 10 ? 2 : 1) : ''}
-          </div>
-        </li>`;
-      }).join('');
+    const html = sorted.map(sat => {
+      const vis = sat.computed.visible;
+      const above = sat.computed.el > 0;
+      const dotClass = vis ? 'sat-dot--visible' : (above ? 'sat-dot--above' : 'sat-dot--below');
+      const elStr = sat.computed.el > -90 ? sat.computed.el.toFixed(1) + '°' : '—';
+      const azStr = sat.computed.az ? sat.computed.az.toFixed(0) + '°' : '—';
+      const isSelected = State.selectedSat === sat;
+
+      return `<li class="sat-item${isSelected ? ' selected' : ''}" data-name="${sat.name}" role="option" aria-selected="${isSelected}">
+        <span class="sat-item__dot ${dotClass}"></span>
+        <div class="sat-item__info">
+          <div class="sat-item__name">${sat.name}</div>
+          <div class="sat-item__sub">${Utils.azToCardinal(sat.computed.az)} ${azStr} · ${sat.tag.toUpperCase()}${vis ? ' · <span class="vis-badge">SICHTBAR</span>' : ''}</div>
+        </div>
+        <div class="sat-item__right">
+          <span class="sat-item__el">${elStr}</span>
+          ${above ? Utils.qualityBars(sat.computed.el >= 60 ? 5 : sat.computed.el >= 40 ? 4 : sat.computed.el >= 20 ? 3 : sat.computed.el >= 10 ? 2 : 1) : ''}
+        </div>
+      </li>`;
+    }).join('');
 
     ul.innerHTML = html || '<li style="padding:16px;color:var(--text-muted);text-align:center">Keine Satelliten gefunden</li>';
 
@@ -1561,10 +1564,9 @@ const UIModule = {
     ul.querySelectorAll('.sat-item').forEach(li => {
       li.addEventListener('click', () => {
         const name = li.dataset.name;
-        const sat  = State.satellites.find(s => s.name === name);
+        const sat = State.satellites.find(s => s.name === name);
         if (sat) {
           this.selectSat(sat);
-          // Point view towards satellite
           if (sat.computed.visible) {
             State.viewAz = sat.computed.az;
             State.viewEl = sat.computed.el;
@@ -1572,6 +1574,47 @@ const UIModule = {
           this.closeSatList();
         }
       });
+    });
+  },
+
+  /** Lightweight in-place update – called every propagation tick.
+      Only updates text/classes of existing DOM nodes without rebuilding HTML. */
+  renderSatList() {
+    const ul = document.getElementById('satList');
+    const items = ul.querySelectorAll('.sat-item');
+    if (items.length === 0) return; // list not built yet
+
+    items.forEach(li => {
+      const name = li.dataset.name;
+      const sat = State.satellites.find(s => s.name === name);
+      if (!sat) return;
+
+      const vis = sat.computed.visible;
+      const above = sat.computed.el > 0;
+      const isSelected = State.selectedSat === sat;
+
+      // Update dot
+      const dot = li.querySelector('.sat-item__dot');
+      if (dot) {
+        dot.className = 'sat-item__dot ' + (vis ? 'sat-dot--visible' : (above ? 'sat-dot--above' : 'sat-dot--below'));
+      }
+
+      // Update subtitle
+      const sub = li.querySelector('.sat-item__sub');
+      if (sub) {
+        const azStr = sat.computed.az ? sat.computed.az.toFixed(0) + '°' : '—';
+        sub.innerHTML = `${Utils.azToCardinal(sat.computed.az)} ${azStr} · ${sat.tag.toUpperCase()}${vis ? ' · <span class="vis-badge">SICHTBAR</span>' : ''}`;
+      }
+
+      // Update elevation
+      const elSpan = li.querySelector('.sat-item__el');
+      if (elSpan) {
+        elSpan.textContent = sat.computed.el > -90 ? sat.computed.el.toFixed(1) + '°' : '—';
+      }
+
+      // Update selected state
+      li.classList.toggle('selected', isSelected);
+      li.setAttribute('aria-selected', isSelected);
     });
   },
 
@@ -1718,7 +1761,17 @@ const App = {
       State.lastPropTime = ts;
       PropagationModule.update();
       UIModule.updateSatChip();
-      UIModule.applyFilter();
+      UIModule.renderSatList();  // lightweight in-place update, no flicker
+
+      // For the "visible" filter, periodically rebuild the list since
+      // satellites can rise/set and need to be added/removed
+      if (State.activeFilter === 'visible') {
+        if (!State._lastFullRebuild || ts - State._lastFullRebuild > 10000) {
+          State._lastFullRebuild = ts;
+          UIModule.applyFilter();
+        }
+      }
+
       if (State.selectedSat) UIModule.updateTelemetry(State.selectedSat);
     }
 
