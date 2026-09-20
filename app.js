@@ -603,7 +603,7 @@ const TouchModule = {
 
     let best = null, bestDist = 30; // px threshold
 
-    for (const sat of State.satellites) {
+    for (const sat of State.filteredSats) {
       if (!sat.computed.visible) continue;
       const p = Utils.azElToXY(sat.computed.az, sat.computed.el, viewAz, viewEl, State.fov, W, H);
       if (!p) continue;
@@ -637,6 +637,7 @@ const PropagationModule = {
         if (!pv.position) { sat.computed.visible = false; continue; }
 
         const posEcf = satellite.eciToEcf(pv.position, gmst);
+        const posGd  = satellite.eciToGeodetic(pv.position, gmst);
         const look   = satellite.ecfToLookAngles(
           { longitude: State.observer.lon * Utils.DEG,
             latitude:  State.observer.lat * Utils.DEG,
@@ -666,6 +667,8 @@ const PropagationModule = {
           range:   rangekm,
           alt:     altKm,
           vel:     vel,  // km/s
+          lat:     posGd.latitude * 180 / Math.PI,
+          lon:     posGd.longitude * 180 / Math.PI,
           visible: elDeg >= CONFIG.VISIBLE_EL_MIN,
         };
         this._updateTrail(sat, azDeg, elDeg);
@@ -695,6 +698,7 @@ const PropagationModule = {
         if (!pv.position) { sat.computed.visible = false; continue; }
 
         const posEcf = satellite.eciToEcf(pv.position, gmst);
+        const posGd  = satellite.eciToGeodetic(pv.position, gmst);
         const look   = satellite.ecfToLookAngles(
           { longitude: State.observer.lon * Utils.DEG,
             latitude:  State.observer.lat * Utils.DEG,
@@ -724,6 +728,8 @@ const PropagationModule = {
           range:   rangekm,
           alt:     altKm,
           vel:     vel,  // km/s
+          lat:     posGd.latitude * 180 / Math.PI,
+          lon:     posGd.longitude * 180 / Math.PI,
           visible: elDeg >= CONFIG.VISIBLE_EL_MIN,
         };
 
@@ -791,6 +797,7 @@ const PropagationModule = {
         const pv   = satellite.propagate(sat.satrec, t);
         if (!pv.position) continue;
         const posEcf = satellite.eciToEcf(pv.position, gmst);
+        const posGd  = satellite.eciToGeodetic(pv.position, gmst);
         const look   = satellite.ecfToLookAngles(
           { longitude: State.observer.lon * Utils.DEG,
             latitude:  State.observer.lat * Utils.DEG,
@@ -1046,7 +1053,7 @@ const SkyRenderer = {
 
     // ── Satellites ───────────────────────────────────────────
     const visCount = State.satellites.filter(s => s.computed.visible).length;
-    for (const sat of State.satellites) {
+    for (const sat of State.filteredSats) {
       if (!sat.computed.visible) continue;
       this._drawSatellite(ctx, sat, viewAz, viewEl, W, H);
     }
@@ -1438,7 +1445,7 @@ const RadarRenderer = {
     }
 
     // Satellites
-    for (const sat of State.satellites) {
+    for (const sat of State.filteredSats) {
       if (sat.computed.el < 0) continue; // not above horizon
       const el = sat.computed.el;
       const az = sat.computed.az;
@@ -1967,15 +1974,11 @@ const MapRenderer = {
     ctx.stroke();
 
     // Draw satellites
-    const time = new Date();
-    for (const sat of State.satellites) {
-      const posAndVel = satellite.propagate(sat.satrec, time);
-      if (!posAndVel.position) continue;
-      const gmst = satellite.gstime(time);
-      const posGd = satellite.eciToGeodetic(posAndVel.position, gmst);
+    for (const sat of State.filteredSats) {
+      if (!sat.computed || sat.computed.lat === undefined) continue;
       
-      let lon = posGd.longitude * 180 / Math.PI;
-      let lat = posGd.latitude * 180 / Math.PI;
+      let lon = sat.computed.lon;
+      let lat = sat.computed.lat;
       
       const x = (lon + 180) / 360 * W;
       const y = (90 - lat) / 180 * H;
