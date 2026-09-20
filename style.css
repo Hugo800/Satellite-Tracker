@@ -694,3 +694,120 @@ body.map-view #mapCanvas { display: block; }
   #radarContainer { bottom: max(54px, calc(env(safe-area-inset-bottom) + 44px)); }
 }
 
+/* ── Signal Quality Bars ────────────────────────────────────── */
+.signal-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.signal-bar {
+  display: inline-block;
+  width: 3px;
+  background: rgba(255,255,255,0.15);
+  border-radius: 1px;
+}
+.signal-bar:nth-child(1) { height: 4px; }
+.signal-bar:nth-child(2) { height: 7px; }
+.signal-bar:nth-child(3) { height: 10px; }
+.signal-bar:nth-child(4) { height: 13px; }
+.signal-bar:nth-child(5) { height: 16px; }
+.signal-bar.active { background: #00cc66; }
+.night-mode .signal-bar.active { background: #ff6600; }
+
+/* ── Visibility Badge ───────────────────────────────────────── */
+.vis-badge {
+  color: #00ff88;
+  font-weight: 600;
+  font-size: 0.75em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.night-mode .vis-badge { color: #ff8800; }
+
+/* ── Sat List Right Column ──────────────────────────────────── */
+.sat-item__right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* ── Pass Prediction Cards ──────────────────────────────────── */
+.pass-loading, .pass-none {
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 0.85em;
+}
+.pass-date {
+  font-weight: 600;
+  font-size: 0.85em;
+  color: var(--accent);
+  margin-top: 10px;
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(0,230,255,0.15);
+}
+.night-mode .pass-date { color: #ff8800; border-color: rgba(255,100,0,0.2); }
+
+.pass-card {
+  background: rgba(0,230,255,0.04);
+  border: 1px solid rgba(0,230,255,0.1);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 6px 0;
+}
+.night-mode .pass-card {
+  background: rgba(255,100,0,0.04);
+  border-color: rgba(255,100,0,0.1);
+}
+
+.pass-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.pass-time {
+  font-weight: 700;
+  font-size: 0.95em;
+  color: #fff;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+.pass-dur {
+  color: var(--text-muted);
+  font-size: 0.8em;
+}
+
+.pass-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78em;
+}
+.pass-table th, .pass-table td {
+  padding: 2px 6px;
+  text-align: center;
+}
+.pass-table th {
+  color: var(--text-muted);
+  font-weight: 400;
+  font-size: 0.9em;
+}
+.pass-table td:first-child {
+  text-align: left;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.pass-table td {
+  color: #ddd;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+/* ── Visibility Status Colors ───────────────────────────────── */
+.vis-good { color: #00ff88 !important; }
+.vis-low  { color: #ffcc44 !important; }
+.vis-horizon { color: #ff8844 !important; }
+.vis-below { color: #ff4444 !important; }
+

@@ -211,6 +211,30 @@ const Utils = {
     let s = seed * 9301 + 49297;
     return (s % 233280) / 233280;
   },
+
+  /** Convert azimuth degrees to cardinal direction string */
+  azToCardinal(az) {
+    az = ((az % 360) + 360) % 360;
+    const dirs = ['N', 'NNO', 'NO', 'ONO', 'O', 'OSO', 'SO', 'SSO',
+                  'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+    return dirs[Math.round(az / 22.5) % 16];
+  },
+
+  /** Format seconds as m:ss */
+  formatDuration(secs) {
+    const m = Math.floor(secs / 60);
+    const s = Math.round(secs % 60);
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  },
+
+  /** Signal quality bars (1-5) as HTML */
+  qualityBars(q) {
+    let bars = '';
+    for (let i = 1; i <= 5; i++) {
+      bars += `<span class="signal-bar${i <= q ? ' active' : ''}"></span>`;
+    }
+    return `<span class="signal-bars">${bars}</span>`;
+  },
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -449,16 +473,21 @@ const OrientationModule = {
       alpha = e.webkitCompassHeading;
     }
 
-    // SIMPLIFIED, ROBUST ELEVATION MAPPING:
-    // When phone is held vertical (pointing at horizon): beta is approx 90
-    // When phone is held flat (screen up, pointing at zenith): beta is approx 0
-    // If the user tilts phone backward beyond flat: beta goes negative
-    
-    // The elevation angle of the sky we want to look at:
-    // beta = 90  => elevation = 0 (horizon)
-    // beta = 0   => elevation = 90 (zenith)
-    const rawElevation = 90 - beta;
-    const elevation = Math.max(0, Math.min(90, rawElevation));
+    // W3C DeviceOrientation spec:
+    // beta = 0   → phone flat on table, screen up
+    // beta = 90  → phone upright, screen facing user (horizon)
+    // beta > 90  → phone tilted backward, screen facing sky
+    //
+    // We want: look at horizon → elevation 0°
+    //          look at zenith  → elevation 90°
+    //
+    // When user holds phone upright (beta≈90) and tilts it up toward sky,
+    // beta goes ABOVE 90 (toward 180). So:
+    //   elevation = beta - 90
+    //   beta=90  → el=0  (horizon) ✓
+    //   beta=180 → el=90 (zenith)  ✓
+    //   beta=45  → el=-45 (below horizon, clamp to 0) ✓
+    const elevation = Math.max(0, Math.min(90, beta - 90));
 
     State.gyroAz = (alpha + State.gyroAzOffset + 360) % 360;
     State.gyroEl = elevation;
@@ -642,15 +671,24 @@ const PropagationModule = {
     }
   },
 
-  /** Estimate next visible pass (simple brute-force, ±2 min steps, 90 min ahead) */
+  /** Estimate upcoming visible passes (brute-force, 30s steps, 24h ahead) */
   estimateNextPass(sat) {
-    if (!State.observer.valid) return null;
-    const step = 2 * 60 * 1000;  // 2 minutes
-    const steps = 90 * 60 * 1000 / step;
-    const now = Date.now();
-    let inPass = false, riseTime = null, setTime = null, maxEl = 0;
+    return this.estimatePasses(sat, 1)[0] || null;
+  },
 
-    for (let i = 0; i < steps; i++) {
+  /** Estimate multiple upcoming passes */
+  estimatePasses(sat, maxPasses = 5) {
+    if (!State.observer.valid) return [];
+    const step = 30 * 1000;  // 30 seconds for accuracy
+    const horizon = 24 * 60 * 60 * 1000; // look 24h ahead
+    const steps = horizon / step;
+    const now = Date.now();
+    const passes = [];
+
+    let inPass = false, riseTime = null, maxEl = 0, maxElTime = null;
+    let riseAz = 0, maxAz = 0;
+
+    for (let i = 0; i <= steps && passes.length < maxPasses; i++) {
       const t = new Date(now + i * step);
       try {
         const gmst = satellite.gstime(t);
@@ -664,16 +702,59 @@ const PropagationModule = {
           posEcf
         );
         const el = look.elevation * (180 / Math.PI);
+        const az = look.azimuth * (180 / Math.PI);
+
         if (el > 0) {
-          if (!inPass) { inPass = true; riseTime = t; }
-          if (el > maxEl) maxEl = el;
+          if (!inPass) {
+            inPass = true;
+            riseTime = t;
+            riseAz = az;
+            maxEl = el;
+            maxElTime = t;
+            maxAz = az;
+          }
+          if (el > maxEl) {
+            maxEl = el;
+            maxElTime = t;
+            maxAz = az;
+          }
         } else if (inPass) {
-          setTime = t; break;
+          // Pass ended
+          const setTime = t;
+          const setAz = az;
+          const duration = (setTime - riseTime) / 1000; // seconds
+
+          // Signal quality: based on max elevation
+          // >60° = excellent (5), >40° = great (4), >20° = good (3), >10° = fair (2), else poor (1)
+          let quality;
+          if (maxEl >= 60) quality = 5;
+          else if (maxEl >= 40) quality = 4;
+          else if (maxEl >= 20) quality = 3;
+          else if (maxEl >= 10) quality = 2;
+          else quality = 1;
+
+          passes.push({
+            riseTime,
+            riseAz,
+            riseDir: Utils.azToCardinal(riseAz),
+            maxElTime,
+            maxEl,
+            maxAz,
+            maxDir: Utils.azToCardinal(maxAz),
+            setTime,
+            setAz,
+            setDir: Utils.azToCardinal(setAz),
+            duration,  // seconds
+            quality,   // 1-5
+          });
+
+          inPass = false;
+          riseTime = null;
+          maxEl = 0;
         }
       } catch(e) {}
     }
-    if (riseTime) return { riseTime, setTime, maxEl };
-    return null;
+    return passes;
   },
 };
 
@@ -1461,9 +1542,12 @@ const UIModule = {
           <span class="sat-item__dot ${dotClass}"></span>
           <div class="sat-item__info">
             <div class="sat-item__name">${sat.name}</div>
-            <div class="sat-item__sub">Az ${azStr} · ${sat.tag.toUpperCase()}</div>
+            <div class="sat-item__sub">${Utils.azToCardinal(sat.computed.az)} ${azStr} · ${sat.tag.toUpperCase()}${vis ? ' · <span class="vis-badge">SICHTBAR</span>' : ''}</div>
           </div>
-          <span class="sat-item__el">${elStr}</span>
+          <div class="sat-item__right">
+            <span class="sat-item__el">${elStr}</span>
+            ${above ? Utils.qualityBars(sat.computed.el >= 60 ? 5 : sat.computed.el >= 40 ? 4 : sat.computed.el >= 20 ? 3 : sat.computed.el >= 10 ? 2 : 1) : ''}
+          </div>
         </li>`;
       }).join('');
 
@@ -1510,16 +1594,20 @@ const UIModule = {
     const c = sat.computed;
 
     document.getElementById('telName').textContent  = sat.name;
-    document.getElementById('telAz').textContent    = c.az.toFixed(1) + '°';
+    document.getElementById('telAz').textContent    = c.az.toFixed(1) + '° ' + Utils.azToCardinal(c.az);
     document.getElementById('telEl').textContent    = c.el.toFixed(1) + '°';
     document.getElementById('telRange').textContent = Math.round(c.range) + ' km';
     document.getElementById('telAlt').textContent   = Math.round(c.alt) + ' km';
     document.getElementById('telVel').textContent   = (c.vel * 3600).toFixed(0) + ' km/h';
 
-    let visText = '🔴 Unter Horizont';
-    if (c.el >= 0) visText = '🟡 Am Horizont';
-    if (c.el >= 5) visText = '🟢 Sichtbar';
-    document.getElementById('telVis').textContent = visText;
+    let visText, visClass;
+    if (c.el >= 10) { visText = '🟢 Gut sichtbar'; visClass = 'vis-good'; }
+    else if (c.el >= 5) { visText = '🟡 Sichtbar (niedrig)'; visClass = 'vis-low'; }
+    else if (c.el >= 0) { visText = '🟠 Am Horizont'; visClass = 'vis-horizon'; }
+    else { visText = '🔴 Unter Horizont'; visClass = 'vis-below'; }
+    const telVisEl = document.getElementById('telVis');
+    telVisEl.textContent = visText;
+    telVisEl.className = 'tel-value ' + visClass;
 
     document.getElementById('telNorad').textContent = sat.noradId || '—';
     document.getElementById('telObserver').textContent =
@@ -1527,20 +1615,49 @@ const UIModule = {
         ? `${State.observer.lat.toFixed(4)}° N, ${State.observer.lon.toFixed(4)}° O`
         : 'Kein GPS';
 
-    // Next pass (async)
-    document.getElementById('telPass').textContent = 'Berechne…';
+    // Compute multiple upcoming passes (async to avoid frame drops)
+    document.getElementById('telPass').innerHTML = '<span class="pass-loading">Berechne Überflüge…</span>';
     setTimeout(() => {
       if (State.selectedSat !== sat) return;
-      const pass = PropagationModule.estimateNextPass(sat);
+      const passes = PropagationModule.estimatePasses(sat, 5);
       const passEl = document.getElementById('telPass');
-      if (!pass) {
-        passEl.textContent = 'Kein Pass in den nächsten 90 min';
+      if (!passes.length) {
+        passEl.innerHTML = '<span class="pass-none">Kein Überflug in den nächsten 24h</span>';
         return;
       }
-      const rise = pass.riseTime.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-      const set  = pass.setTime ? pass.setTime.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '?';
-      passEl.innerHTML = `Aufgang: <span class="pass-highlight">${rise}</span><br>Untergang: <span class="pass-highlight">${set}</span><br>Max. Elevation: <span class="pass-highlight">${pass.maxEl.toFixed(1)}°</span>`;
-    }, 50);
+
+      const timeFmt = { hour: '2-digit', minute: '2-digit', second: '2-digit' };
+      const dateFmt = { weekday: 'short', day: 'numeric', month: 'short' };
+
+      let html = '';
+      let lastDateStr = '';
+      for (const pass of passes) {
+        const dateStr = pass.riseTime.toLocaleDateString('de-DE', dateFmt);
+        if (dateStr !== lastDateStr) {
+          html += `<div class="pass-date">${dateStr}</div>`;
+          lastDateStr = dateStr;
+        }
+
+        const rise = pass.riseTime.toLocaleTimeString('de-DE', timeFmt);
+        const set  = pass.setTime ? pass.setTime.toLocaleTimeString('de-DE', timeFmt) : '?';
+        const dur  = Utils.formatDuration(pass.duration);
+        const bars = Utils.qualityBars(pass.quality);
+
+        html += `<div class="pass-card">
+          <div class="pass-header">
+            <span class="pass-time">${rise}</span>
+            <span class="pass-dur">Dauer ${dur}</span>
+            ${bars}
+          </div>
+          <table class="pass-table">
+            <tr><th></th><th>Beginn</th><th>Max.</th><th>Ende</th></tr>
+            <tr><td>Richtung</td><td>${pass.riseDir}</td><td>${pass.maxDir}</td><td>${pass.setDir}</td></tr>
+            <tr><td>Höhe</td><td>${Math.round(pass.maxEl > 0 ? Math.min(pass.maxEl * 0.3, 15) : 0)}°</td><td>${pass.maxEl.toFixed(0)}°</td><td>${Math.round(pass.maxEl > 0 ? Math.min(pass.maxEl * 0.2, 10) : 0)}°</td></tr>
+          </table>
+        </div>`;
+      }
+      passEl.innerHTML = html;
+    }, 100);
   },
 };
 
