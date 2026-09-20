@@ -13,7 +13,14 @@ import type { SatRec } from 'satellite.js';
 import type { Ephemeris, ObserverGd, PassPrediction, Vec3 } from '../types';
 import { RAD, normalizeAngle } from './coords';
 import { isEclipsed, sunEciUnitVector } from './sun';
-import { INVISIBLE_MAGNITUDE, apparentMagnitude, phaseAngle } from './visibility';
+import {
+  INVISIBLE_MAGNITUDE,
+  NAKED_EYE_LIMIT,
+  NAKED_EYE_MIN_ELEVATION,
+  apparentMagnitude,
+  illuminatedFraction,
+  phaseAngle,
+} from './visibility';
 
 interface RawPv {
   position?: Vec3 | false | null;
@@ -160,6 +167,78 @@ export interface PassOptions {
   stepSec?: number;
   /** Mindest-Elevation in Grad, ab der ein Überflug zählt. */
   minElevationDeg?: number;
+  /** Helligkeit bei 1000 km und vollem Phasenwinkel – Basis der Helligkeitsschätzung. */
+  standardMagnitude?: number;
+}
+
+/** Abtastschritt innerhalb eines gefundenen Überflugs für die Helligkeitsanalyse. */
+const BRIGHTNESS_STEP_MS = 15_000;
+
+interface Brightness {
+  sunlitStart: number | null;
+  sunlitEnd: number | null;
+  sunlitSec: number;
+  peakMagnitude: number;
+  illumination: number;
+  nakedEye: boolean;
+}
+
+/**
+ * Tastet einen Überflug ab und bestimmt, wann der Satellit sonnenbeschienen ist
+ * und wie hell er dabei maximal wird.
+ */
+function analyseBrightness(
+  satrec: SatRec,
+  observer: ObserverGd,
+  aos: number,
+  los: number,
+  standardMagnitude: number | undefined,
+): Brightness {
+  const empty: Brightness = {
+    sunlitStart: null,
+    sunlitEnd: null,
+    sunlitSec: 0,
+    peakMagnitude: INVISIBLE_MAGNITUDE,
+    illumination: 0,
+    nakedEye: false,
+  };
+  if (standardMagnitude === undefined) return empty;
+
+  const result = { ...empty };
+  const steps = Math.max(2, Math.ceil((los - aos) / BRIGHTNESS_STEP_MS));
+
+  for (let i = 0; i <= steps; i += 1) {
+    const ms = aos + ((los - aos) * i) / steps;
+    const found = lookAt(satrec, ms, observer);
+    if (!found) continue;
+
+    const date = new Date(ms);
+    const sunUnit = sunEciUnitVector(date);
+    const position = found.position as Vec3;
+    if (isEclipsed(position, sunUnit)) continue;
+
+    if (result.sunlitStart === null) result.sunlitStart = ms;
+    result.sunlitEnd = ms;
+
+    const phase = phaseAngle(position, observerEciPosition(observer, date), sunUnit);
+    const magnitude = apparentMagnitude(
+      standardMagnitude,
+      found.look.rangeSat,
+      phase,
+      found.look.elevation,
+    );
+    if (magnitude < result.peakMagnitude) {
+      result.peakMagnitude = magnitude;
+      result.illumination = illuminatedFraction(phase);
+      result.nakedEye =
+        magnitude <= NAKED_EYE_LIMIT && found.look.elevation >= NAKED_EYE_MIN_ELEVATION;
+    }
+  }
+
+  if (result.sunlitStart !== null && result.sunlitEnd !== null) {
+    result.sunlitSec = Math.max(0, (result.sunlitEnd - result.sunlitStart) / 1000);
+  }
+  return result;
 }
 
 /**
@@ -225,10 +304,7 @@ export function predictNextPass(
 
     const aosLook = lookAt(satrec, aos, observer);
     const losLook = lookAt(satrec, los, observer);
-    const tcaLook = lookAt(satrec, tca, observer);
-    const sunlitAtTca = tcaLook
-      ? !isEclipsed(tcaLook.position as Vec3, sunEciUnitVector(new Date(tca)))
-      : false;
+    const brightness = analyseBrightness(satrec, observer, aos, los, options.standardMagnitude);
 
     return {
       aos,
@@ -238,9 +314,38 @@ export function predictNextPass(
       aosAzimuthDeg: aosLook ? normalizeAngle(aosLook.look.azimuth) * RAD : 0,
       losAzimuthDeg: losLook ? normalizeAngle(losLook.look.azimuth) * RAD : 0,
       durationSec: Math.max(0, (los - aos) / 1000),
-      visible: sunlitAtTca,
+      ...brightness,
     };
   }
 
   return null;
+}
+
+/**
+ * Alle Überflüge im Suchfenster. Setzt die Suche jeweils kurz nach dem letzten
+ * Untergang fort, sodass das Fenster insgesamt nur einmal abgetastet wird.
+ */
+export function predictPasses(
+  satrec: SatRec,
+  observer: ObserverGd,
+  options: PassOptions,
+  maxPasses = 60,
+): PassPrediction[] {
+  const endMs = options.fromMs + options.searchHours * 3600_000;
+  const passes: PassPrediction[] = [];
+  let cursor = options.fromMs;
+
+  while (passes.length < maxPasses && cursor < endMs) {
+    const pass = predictNextPass(satrec, observer, {
+      ...options,
+      fromMs: cursor,
+      searchHours: (endMs - cursor) / 3600_000,
+    });
+    if (!pass) break;
+    passes.push(pass);
+    // Etwas Abstand hinter den Untergang, damit derselbe Überflug nicht erneut anschlägt.
+    cursor = pass.los + 60_000;
+  }
+
+  return passes;
 }

@@ -56,6 +56,14 @@ function airmass(elevationRad: number): number {
 }
 
 /**
+ * Beleuchteter Anteil der dem Beobachter zugewandten Fläche.
+ * 1 = voll angestrahlt („Vollmond“), 0 = der Satellit zeigt uns seine Nachtseite.
+ */
+export function illuminatedFraction(phaseAngleRad: number): number {
+  return ((Math.PI - phaseAngleRad) * Math.cos(phaseAngleRad) + Math.sin(phaseAngleRad)) / Math.PI;
+}
+
+/**
  * Scheinbare visuelle Helligkeit eines sonnenbeschienenen Satelliten.
  *
  * Diffus streuende Kugel als Phasenfunktion plus atmosphärische Extinktion –
@@ -67,8 +75,7 @@ export function apparentMagnitude(
   phaseAngleRad: number,
   elevationRad: number,
 ): number {
-  const phaseFactor =
-    ((Math.PI - phaseAngleRad) * Math.cos(phaseAngleRad) + Math.sin(phaseAngleRad)) / Math.PI;
+  const phaseFactor = illuminatedFraction(phaseAngleRad);
   if (phaseFactor <= 1e-4) return INVISIBLE_MAGNITUDE;
 
   const distanceTerm = 5 * Math.log10(rangeKm / 1000);

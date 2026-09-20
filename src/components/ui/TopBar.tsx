@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import {
   AlertTriangle,
   Compass,
@@ -11,7 +11,9 @@ import {
 } from 'lucide-react';
 import { compassLabel } from '../../math/coords';
 import { useDeviceOrientation } from '../../hooks/useDeviceOrientation';
-import { viewState } from '../../state/runtime';
+import { TELEMETRY_STRIDE, T_ECLIPSED, T_EL, T_MAG, T_RANGE } from '../../math/telemetryLayout';
+import { passesSkyFilter } from '../../math/visibility';
+import { telemetry, viewState } from '../../state/runtime';
 import { useAppStore } from '../../state/store';
 import { formatNumber } from '../../utils/format';
 import { ModeSwitch } from './ModeSwitch';
@@ -53,6 +55,7 @@ export function TopBar(): React.JSX.Element {
   const status = useAppStore((s) => s.status);
   const loading = useAppStore((s) => s.loading);
   const catalog = useAppStore((s) => s.catalog);
+  const mode = useAppStore((s) => s.filters.mode);
   const arEnabled = useAppStore((s) => s.arEnabled);
   const arSupported = useAppStore((s) => s.arSupported);
   const compassStatus = useAppStore((s) => s.compassStatus);
@@ -65,6 +68,45 @@ export function TopBar(): React.JSX.Element {
 
   const { enable, disable } = useDeviceOrientation();
   const headingRef = useRef<HTMLSpanElement>(null);
+  const skyCountRef = useRef<HTMLSpanElement>(null);
+
+  const starlinkFlags = useMemo(() => {
+    let maxIndex = 0;
+    for (const meta of catalog) maxIndex = Math.max(maxIndex, meta.index);
+    const flags = new Uint8Array(maxIndex + 1);
+    for (const meta of catalog) flags[meta.index] = meta.group === 'starlink' ? 1 : 0;
+    return flags;
+  }, [catalog]);
+
+  // Nur 1 Hz und ohne Re-Render: Der Zähler macht sichtbar, dass stets nur ein
+  // kleiner Teil des Katalogs gleichzeitig über dem Horizont steht.
+  useEffect(() => {
+    const update = () => {
+      const node = skyCountRef.current;
+      if (!node) return;
+      const data = telemetry.data;
+      let count = 0;
+      for (let i = 0; i < telemetry.count; i += 1) {
+        const base = i * TELEMETRY_STRIDE;
+        if (!Number.isFinite(data[base + T_RANGE])) continue;
+        if (
+          passesSkyFilter(
+            mode,
+            starlinkFlags[i] === 1,
+            data[base + T_EL],
+            data[base + T_ECLIPSED] > 0.5,
+            data[base + T_MAG],
+          )
+        ) {
+          count += 1;
+        }
+      }
+      node.textContent = String(count);
+    };
+    update();
+    const id = window.setInterval(update, 1000);
+    return () => window.clearInterval(id);
+  }, [mode, starlinkFlags]);
 
   useEffect(() => {
     let frame = 0;
@@ -89,10 +131,16 @@ export function TopBar(): React.JSX.Element {
           <div className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.18em] text-sky-200 uppercase">
             <Satellite size={13} className={loading ? 'animate-hud-pulse' : ''} />
             Orbital Atlas
-            <span className="ml-auto tabular-nums text-sky-300/70">{catalog.length} Obj.</span>
           </div>
 
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-sky-300/70">
+            <span
+              className="inline-flex items-center gap-1 tabular-nums"
+              title="Objekte im Sichtbereich / Objekte im Katalog"
+            >
+              <Orbit size={10} />
+              <span ref={skyCountRef}>0</span>/{catalog.length} Obj.
+            </span>
             <span className="inline-flex items-center gap-1">
               <MapPin size={10} />
               {observer

@@ -84,8 +84,17 @@ export interface PassPrediction {
   losAzimuthDeg: number;
   /** Dauer in Sekunden. */
   durationSec: number;
-  /** true, wenn der Satellit während des Höchststands sonnenbeschienen und der Himmel dunkel ist. */
-  visible: boolean;
+  /** Beginn/Ende des sonnenbeschienenen Abschnitts; `null`, wenn der Überflug ganz im Erdschatten liegt. */
+  sunlitStart: number | null;
+  sunlitEnd: number | null;
+  /** Dauer des sonnenbeschienenen Abschnitts in Sekunden. */
+  sunlitSec: number;
+  /** Beste (kleinste) scheinbare Helligkeit während des Überflugs. */
+  peakMagnitude: number;
+  /** Beleuchteter Flächenanteil im Helligkeitsmaximum: 0 = Nachtseite, 1 = voll angestrahlt. */
+  illumination: number;
+  /** true, wenn der Überflug realistisch mit bloßem Auge zu sehen ist. */
+  nakedEye: boolean;
 }
 
 /** Topozentrische Position der Sonne am Beobachterstandort. */
@@ -142,6 +151,6 @@ export type WorkerResponse =
   | { type: 'catalog'; catalog: SatelliteMeta[] }
   | { type: 'tick'; time: number; count: number; buffer: ArrayBuffer }
   | { type: 'trail'; index: number; points: Float32Array }
-  | { type: 'pass'; index: number; pass: PassPrediction | null }
+  | { type: 'pass'; index: number; passes: PassPrediction[] }
   | { type: 'status'; message: string; loading: boolean }
   | { type: 'error'; message: string };

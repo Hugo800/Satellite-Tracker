@@ -12,7 +12,14 @@ import {
 import { RAD, compassLabel } from '../../math/coords';
 import { readSample, requestFocus } from '../../state/runtime';
 import { useAppStore } from '../../state/store';
-import { formatClock, formatCountdown, formatDurationSec, formatNumber } from '../../utils/format';
+import {
+  formatClockShort,
+  formatCountdown,
+  formatDay,
+  formatDurationSec,
+  formatNumber,
+} from '../../utils/format';
+import type { PassPrediction } from '../../types';
 
 interface LiveFieldProps {
   label: string;
@@ -38,6 +45,55 @@ function LiveField({
 }
 
 /**
+ * Ein Überflug in der Liste.
+ *
+ * Maßgeblich ist das sonnenbeschienene Fenster: Nur darin ist der Satellit
+ * überhaupt am Himmel zu sehen – der Rest des Bogens liegt im Erdschatten.
+ */
+function PassRow({ pass }: { pass: PassPrediction }): React.JSX.Element {
+  const sunlit = pass.sunlitSec > 0 && pass.sunlitStart !== null;
+  const startMs = sunlit ? (pass.sunlitStart as number) : pass.aos;
+  const endMs = sunlit ? (pass.sunlitEnd as number) : pass.los;
+  const seconds = sunlit ? pass.sunlitSec : pass.durationSec;
+
+  const badge = !sunlit
+    ? { text: 'Erdschatten', className: 'bg-slate-700/40 text-slate-300' }
+    : pass.nakedEye
+      ? { text: 'bloßes Auge', className: 'bg-amber-400/20 text-amber-200' }
+      : { text: 'nur optisch', className: 'bg-sky-400/15 text-sky-300' };
+
+  return (
+    <li className="rounded-md border border-sky-400/15 bg-sky-950/30 px-2 py-1.5">
+      <div className="flex items-baseline gap-1.5">
+        <span className="text-[10px] text-sky-300/60">{formatDay(startMs)}</span>
+        <span className="text-xs font-semibold tabular-nums text-sky-100">
+          {formatClockShort(startMs)} – {formatClockShort(endMs)}
+        </span>
+        <span
+          className={`ml-auto rounded px-1.5 py-0.5 text-[9px] font-semibold ${badge.className}`}
+        >
+          {badge.text}
+        </span>
+      </div>
+      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[10px] text-sky-300/70 tabular-nums">
+        <span>{formatDurationSec(seconds)}</span>
+        <span>· max. {formatNumber(pass.maxElevationDeg, 0)}°</span>
+        <span>
+          · {formatNumber(pass.aosAzimuthDeg, 0)}° {compassLabel(pass.aosAzimuthDeg)} →{' '}
+          {formatNumber(pass.losAzimuthDeg, 0)}° {compassLabel(pass.losAzimuthDeg)}
+        </span>
+        {sunlit && (
+          <span className={pass.nakedEye ? 'text-amber-300' : ''}>
+            · {formatNumber(pass.peakMagnitude, 1)} mag ·{' '}
+            {formatNumber(pass.illumination * 100, 0)} % beleuchtet
+          </span>
+        )}
+      </div>
+    </li>
+  );
+}
+
+/**
  * Sci-Fi-HUD mit Live-Telemetrie des selektierten Objekts.
  *
  * Die Zahlenwerte werden per rAF direkt in die DOM-Knoten geschrieben –
@@ -46,7 +102,7 @@ function LiveField({
 export function TelemetryPanel(): React.JSX.Element | null {
   const selectedIndex = useAppStore((s) => s.selectedIndex);
   const catalogByIndex = useAppStore((s) => s.catalogByIndex);
-  const pass = useAppStore((s) => s.pass);
+  const passes = useAppStore((s) => s.passes);
   const passPending = useAppStore((s) => s.passPending);
   const select = useAppStore((s) => s.select);
   const [expanded, setExpanded] = useState(true);
@@ -97,14 +153,18 @@ export function TelemetryPanel(): React.JSX.Element | null {
     return () => cancelAnimationFrame(frame);
   }, [selectedIndex, expanded]);
 
+  const nextPass = passes.length > 0 ? passes[0] : null;
   useEffect(() => {
-    if (!pass) return;
-    const id = window.setInterval(() => {
-      if (countdownRef.current) countdownRef.current.textContent = formatCountdown(pass.aos);
-    }, 1000);
-    if (countdownRef.current) countdownRef.current.textContent = formatCountdown(pass.aos);
+    if (!nextPass) return;
+    const write = () => {
+      if (countdownRef.current) {
+        countdownRef.current.textContent = formatCountdown(nextPass.sunlitStart ?? nextPass.aos);
+      }
+    };
+    write();
+    const id = window.setInterval(write, 1000);
     return () => window.clearInterval(id);
-  }, [pass]);
+  }, [nextPass]);
 
   if (selectedIndex === null) return null;
   const meta = catalogByIndex.get(selectedIndex);
@@ -208,49 +268,28 @@ export function TelemetryPanel(): React.JSX.Element | null {
 
           <div className="rounded-md border border-sky-400/15 bg-sky-950/30 px-2 py-2">
             <div className="mb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-[0.16em] text-sky-300/60">
-              <Timer size={12} /> Nächster Überflug
+              <Timer size={12} /> Überflüge · nächste 48 h
+              {passes.length > 0 && (
+                <span className="ml-auto normal-case tracking-normal text-sky-200">
+                  <span ref={countdownRef}>–</span>
+                </span>
+              )}
             </div>
 
             {passPending && <div className="text-xs text-sky-300/70">Berechne Ephemeriden …</div>}
 
-            {!passPending && !pass && (
+            {!passPending && passes.length === 0 && (
               <div className="flex items-center gap-1.5 text-xs text-slate-400">
                 <EyeOff size={12} /> Kein Überflug in den nächsten 48 h
               </div>
             )}
 
-            {!passPending && pass && (
-              <div className="space-y-1 text-xs text-sky-100">
-                <div className="flex items-center justify-between">
-                  <span className="text-sky-300/70">AOS (Aufgang)</span>
-                  <span className="tabular-nums">
-                    {formatClock(pass.aos)} · {formatNumber(pass.aosAzimuthDeg, 0)}°{' '}
-                    {compassLabel(pass.aosAzimuthDeg)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sky-300/70">TCA (Höchststand)</span>
-                  <span className="tabular-nums">
-                    {formatClock(pass.tca)} · {formatNumber(pass.maxElevationDeg, 0)}° Elev.
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sky-300/70">LOS (Untergang)</span>
-                  <span className="tabular-nums">
-                    {formatClock(pass.los)} · {formatNumber(pass.losAzimuthDeg, 0)}°{' '}
-                    {compassLabel(pass.losAzimuthDeg)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between border-t border-sky-400/10 pt-1">
-                  <span ref={countdownRef} className="font-semibold text-sky-200">
-                    –
-                  </span>
-                  <span className="text-sky-300/70">
-                    {formatDurationSec(pass.durationSec)} ·{' '}
-                    {pass.visible ? 'sonnenbeschienen' : 'im Erdschatten'}
-                  </span>
-                </div>
-              </div>
+            {!passPending && passes.length > 0 && (
+              <ul className="max-h-56 space-y-1 overflow-y-auto overscroll-contain pr-0.5">
+                {passes.map((p) => (
+                  <PassRow key={p.aos} pass={p} />
+                ))}
+              </ul>
             )}
           </div>
         </div>

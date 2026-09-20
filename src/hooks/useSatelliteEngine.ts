@@ -40,7 +40,7 @@ export function useSatelliteEngine({ intervalMs = 100 }: EngineOptions = {}): vo
   const setCatalog = useAppStore((s) => s.setCatalog);
   const setStatus = useAppStore((s) => s.setStatus);
   const pushError = useAppStore((s) => s.pushError);
-  const setPass = useAppStore((s) => s.setPass);
+  const setPasses = useAppStore((s) => s.setPasses);
   const started = useRef(false);
 
   useEffect(() => {
@@ -71,7 +71,7 @@ export function useSatelliteEngine({ intervalMs = 100 }: EngineOptions = {}): vo
           trailState.version += 1;
           break;
         case 'pass':
-          setPass(msg.pass);
+          setPasses(msg.index, msg.passes);
           break;
         case 'error':
           pushError(msg.message);
@@ -88,7 +88,7 @@ export function useSatelliteEngine({ intervalMs = 100 }: EngineOptions = {}): vo
       telemetry.count = 0;
       telemetry.data = new Float32Array(0);
     };
-  }, [setCatalog, setStatus, pushError, setPass]);
+}, [setCatalog, setStatus, pushError, setPasses]);
 
   useEffect(() => {
     if (!observer) return;

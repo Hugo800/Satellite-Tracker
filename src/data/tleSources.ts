@@ -6,6 +6,8 @@ export interface TleSource {
   url: string;
   /** Obergrenze, um mobile GPUs nicht zu überfahren. */
   limit: number;
+  /** Starlink liefert mehrere Megabyte – dafür reicht das Standardfenster nicht. */
+  timeoutMs: number;
 }
 
 const GP = 'https://celestrak.org/NORAD/elements/gp.php';
@@ -16,24 +18,28 @@ export const TLE_SOURCES: Record<SatelliteGroup, TleSource> = {
     label: 'Raumstationen',
     url: `${GP}?GROUP=stations&FORMAT=tle`,
     limit: 120,
+    timeoutMs: 15_000,
   },
   brightest: {
     group: 'brightest',
     label: 'Hellste Objekte',
     url: `${GP}?GROUP=visual&FORMAT=tle`,
     limit: 260,
+    timeoutMs: 20_000,
   },
   weather: {
     group: 'weather',
     label: 'Wettersatelliten',
     url: `${GP}?GROUP=weather&FORMAT=tle`,
     limit: 200,
+    timeoutMs: 20_000,
   },
   starlink: {
     group: 'starlink',
     label: 'Starlink',
     url: `${GP}?GROUP=starlink&FORMAT=tle`,
     limit: 2600,
+    timeoutMs: 60_000,
   },
 };
 

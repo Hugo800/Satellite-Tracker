@@ -4,6 +4,11 @@ const TIME_FMT = new Intl.DateTimeFormat('de-DE', {
   second: '2-digit',
 });
 
+const SHORT_TIME_FMT = new Intl.DateTimeFormat('de-DE', {
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
 const DATE_FMT = new Intl.DateTimeFormat('de-DE', {
   weekday: 'short',
   day: '2-digit',
@@ -12,6 +17,11 @@ const DATE_FMT = new Intl.DateTimeFormat('de-DE', {
 
 export function formatClock(ms: number): string {
   return TIME_FMT.format(new Date(ms));
+}
+
+/** Uhrzeit ohne Sekunden – für Zeitfenster, bei denen Minuten genügen. */
+export function formatClockShort(ms: number): string {
+  return SHORT_TIME_FMT.format(new Date(ms));
 }
 
 export function formatDay(ms: number): string {
@@ -31,8 +41,11 @@ export function formatCountdown(targetMs: number, nowMs: number = Date.now()): s
 }
 
 export function formatDurationSec(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = Math.round(seconds % 60);
+  // Erst runden, dann aufteilen – sonst entsteht durch zwei getrennte
+  // Rundungen eine Ausgabe wie „1 min 60 s“.
+  const total = Math.max(0, Math.round(seconds));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
   return m > 0 ? `${m} min ${s} s` : `${s} s`;
 }
 

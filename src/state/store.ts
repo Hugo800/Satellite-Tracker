@@ -22,7 +22,9 @@ export interface AppState {
   errors: string[];
 
   selectedIndex: number | null;
-  pass: PassPrediction | null;
+  passes: PassPrediction[];
+  /** Satellit, zu dem `passes` gehört – verhindert, dass eine verzögerte Antwort die neue Auswahl überschreibt. */
+  passIndex: number | null;
   passPending: boolean;
 
   filters: CatalogFilters;
@@ -41,7 +43,7 @@ export interface AppState {
   setStatus: (status: string, loading: boolean) => void;
   pushError: (message: string) => void;
   select: (index: number | null) => void;
-  setPass: (pass: PassPrediction | null) => void;
+  setPasses: (index: number, passes: PassPrediction[]) => void;
   setPassPending: (pending: boolean) => void;
   setFilters: (patch: Partial<CatalogFilters>) => void;
   setMode: (mode: SkyFilterMode) => void;
@@ -73,7 +75,8 @@ export const useAppStore = create<AppState>((set) => ({
   errors: [],
 
   selectedIndex: null,
-  pass: null,
+  passes: [],
+  passIndex: null,
   passPending: false,
 
   filters: DEFAULT_FILTERS,
@@ -93,8 +96,14 @@ export const useAppStore = create<AppState>((set) => ({
   setStatus: (status, loading) => set({ status, loading }),
   pushError: (message) =>
     set((state) => ({ errors: [...state.errors.slice(-3), message] })),
-  select: (selectedIndex) => set({ selectedIndex, pass: null, passPending: selectedIndex !== null }),
-  setPass: (pass) => set({ pass, passPending: false }),
+  select: (selectedIndex) =>
+    set({ selectedIndex, passes: [], passIndex: null, passPending: selectedIndex !== null }),
+  setPasses: (index, passes) =>
+    set((state) =>
+      state.selectedIndex === index
+        ? { passes, passIndex: index, passPending: false }
+        : state,
+    ),
   setPassPending: (passPending) => set({ passPending }),
   setFilters: (patch) => set((state) => ({ filters: { ...state.filters, ...patch } })),
   setMode: (mode) => set((state) => ({ filters: { ...state.filters, mode } })),

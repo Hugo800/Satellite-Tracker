@@ -11,7 +11,7 @@ import { twoline2satrec } from 'satellite.js';
 import type { SatRec } from 'satellite.js';
 import { FALLBACK_TLE, HIGHLIGHT_NORAD_IDS, TLE_SOURCES } from '../data/tleSources';
 import { geoToObserverGd, normalizeAngle } from '../math/coords';
-import { observerEciPosition, predictNextPass, propagateEphemeris } from '../math/propagation';
+import { observerEciPosition, predictPasses, propagateEphemeris } from '../math/propagation';
 import { sunEciUnitVector } from '../math/sun';
 import { standardMagnitudeFor } from '../math/visibility';
 import {
@@ -50,10 +50,11 @@ let timeScale = 1;
 let virtualTimeMs = Date.now();
 let lastRealMs = Date.now();
 
-/** Wartezeit, bis gedrosselte CelesTrak-Gruppen erneut versucht werden. */
-const RETRY_DELAY_MS = 5 * 60 * 1000;
-/** Hängende Verbindungen dürfen den Katalogaufbau nicht blockieren. */
-const FETCH_TIMEOUT_MS = 12_000;
+/** Gestaffelte Wartezeiten, bis gedrosselte CelesTrak-Gruppen erneut versucht werden. */
+const RETRY_DELAYS_MS = [45_000, 3 * 60_000, 10 * 60_000];
+let retryStep = 0;
+/** Abstand zwischen zwei Gruppenabrufen – hält uns unter dem Rate-Limit. */
+const GROUP_GAP_MS = 1500;
 
 function post(message: WorkerResponse, transfer?: Transferable[]): void {
   ctx.postMessage(message, transfer ?? []);
@@ -141,13 +142,13 @@ async function writeCachedTle(url: string, text: string): Promise<void> {
 async function fetchTle(source: (typeof TLE_SOURCES)[SatelliteGroup]): Promise<string> {
   let lastError = 'unbekannt';
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    if (attempt > 0) await sleep(1200);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (attempt > 0) await sleep(1500 * attempt);
     try {
       const res = await fetch(source.url, {
         mode: 'cors',
         cache: 'default',
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        signal: AbortSignal.timeout(source.timeoutMs),
       });
 
       if (res.status === 403 || res.status === 429) {
@@ -213,7 +214,7 @@ async function loadGroups(groups: SatelliteGroup[], reset: boolean): Promise<voi
       });
     }
     // Abstand zwischen den Gruppen hält uns unter dem Rate-Limit.
-    await sleep(600);
+    await sleep(GROUP_GAP_MS);
   }
 
   if (entries.length === 0) {
@@ -226,11 +227,17 @@ async function loadGroups(groups: SatelliteGroup[], reset: boolean): Promise<voi
 
   // CelesTrak gibt Gruppen erst nach Ablauf des Update-Intervalls wieder frei;
   // ein späterer Versuch holt sie nach, ohne den Nutzer zu behelligen.
-  if (failed.length > 0 && retryTimer === null) {
-    retryTimer = setTimeout(() => {
-      retryTimer = null;
-      void loadGroups(failed, false);
-    }, RETRY_DELAY_MS);
+  if (failed.length > 0) {
+    if (retryTimer === null) {
+      const delay = RETRY_DELAYS_MS[Math.min(retryStep, RETRY_DELAYS_MS.length - 1)];
+      retryStep += 1;
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        void loadGroups(failed, false);
+      }, delay);
+    }
+  } else {
+    retryStep = 0;
   }
 }
 
@@ -239,6 +246,7 @@ function loadCatalog(groups: SatelliteGroup[]): Promise<void> {
     clearTimeout(retryTimer);
     retryTimer = null;
   }
+  retryStep = 0;
   return loadGroups(groups, true);
 }
 
@@ -353,16 +361,17 @@ ctx.onmessage = (event: MessageEvent<WorkerRequest>) => {
     case 'pass': {
       const entry = entries[msg.index];
       if (!entry || !observer) {
-        post({ type: 'pass', index: msg.index, pass: null });
+        post({ type: 'pass', index: msg.index, passes: [] });
         break;
       }
-      const pass = predictNextPass(entry.satrec, observer, {
+      const passes = predictPasses(entry.satrec, observer, {
         fromMs: virtualTimeMs,
         searchHours: msg.searchHours,
         stepSec: 30,
         minElevationDeg: 1,
+        standardMagnitude: entry.meta.standardMagnitude,
       });
-      post({ type: 'pass', index: msg.index, pass });
+      post({ type: 'pass', index: msg.index, passes });
       break;
     }
   }
