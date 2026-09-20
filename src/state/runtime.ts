@@ -94,6 +94,8 @@ export interface OrientationState {
   headingDeg: number;
   /** Bildschirmrotation in Radiant. */
   screenAngle: number;
+  /** Kompassgenauigkeit in Grad, sofern die Plattform sie meldet (iOS). */
+  accuracyDeg: number | null;
 }
 
 export const orientationState: OrientationState = {
@@ -101,6 +103,7 @@ export const orientationState: OrientationState = {
   available: false,
   headingDeg: 0,
   screenAngle: 0,
+  accuracyDeg: null,
 };
 
 /** Bahnspur des aktuell selektierten Objekts (Einheitsvektoren, xyz-interleaved). */

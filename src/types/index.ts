@@ -95,6 +95,13 @@ export interface SunState {
   daylight: number;
 }
 
+/**
+ * Güte der Kompassquelle:
+ * `ok` = erdfest und kalibriert, `calibrating` = iOS meldet schlechte Genauigkeit,
+ * `relative` = nur relative Lagedaten ohne Nordbezug.
+ */
+export type CompassStatus = 'unknown' | 'ok' | 'calibrating' | 'relative';
+
 /** Aktive Filter der Satellitenliste. */
 export interface CatalogFilters {
   visibleOnly: boolean;

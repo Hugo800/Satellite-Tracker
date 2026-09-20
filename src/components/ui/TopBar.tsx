@@ -62,6 +62,7 @@ export function TopBar(): React.JSX.Element {
   const catalog = useAppStore((s) => s.catalog);
   const arEnabled = useAppStore((s) => s.arEnabled);
   const arSupported = useAppStore((s) => s.arSupported);
+  const compassStatus = useAppStore((s) => s.compassStatus);
   const nightMode = useAppStore((s) => s.nightMode);
   const toggleNightMode = useAppStore((s) => s.toggleNightMode);
   const showTrails = useAppStore((s) => s.showTrails);
@@ -146,6 +147,18 @@ export function TopBar(): React.JSX.Element {
       {!arSupported && (
         <div className="pointer-events-none self-start rounded-md border border-amber-400/30 bg-amber-950/40 px-2 py-1 text-[10px] text-amber-200">
           Kein Orientierungssensor erkannt – Touch-Navigation aktiv.
+        </div>
+      )}
+
+      {arEnabled && compassStatus === 'calibrating' && (
+        <div className="pointer-events-none self-start rounded-md border border-amber-400/30 bg-amber-950/40 px-2 py-1 text-[10px] text-amber-200">
+          Kompass unpräzise – Gerät einige Male in einer liegenden Acht bewegen.
+        </div>
+      )}
+
+      {arEnabled && compassStatus === 'relative' && (
+        <div className="pointer-events-none self-start rounded-md border border-amber-400/30 bg-amber-950/40 px-2 py-1 text-[10px] text-amber-200">
+          Kein erdfester Kompass verfügbar – Nordrichtung kann abweichen.
         </div>
       )}
 

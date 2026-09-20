@@ -97,8 +97,9 @@ export function CameraRig(): React.JSX.Element {
     if (controls) controls.enabled = !arActive;
 
     if (arActive) {
-      // Leichtes Slerp glättet Sensorrauschen, ohne spürbare Latenz zu erzeugen.
-      camera.quaternion.slerp(orientationState.quaternion, Math.min(1, delta * 12));
+      // Leichtes Slerp glättet den Restjitter der Sensorfusion; die Kursmittelung
+      // selbst passiert bereits in useDeviceOrientation.
+      camera.quaternion.slerp(orientationState.quaternion, Math.min(1, delta * 9));
     } else if (controls && viewState.focus) {
       const targetTheta = -viewState.focus.azimuth;
       const targetPhi = clamp(Math.PI / 2 + viewState.focus.elevation, 0.02, Math.PI - 0.02);

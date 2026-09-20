@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type {
   CatalogFilters,
+  CompassStatus,
   GeoCoord,
   PassPrediction,
   SatelliteGroup,
@@ -26,6 +27,7 @@ export interface AppState {
   drawerOpen: boolean;
   arEnabled: boolean;
   arSupported: boolean;
+  compassStatus: CompassStatus;
   nightMode: boolean;
   showTrails: boolean;
   sun: SunState;
@@ -43,6 +45,7 @@ export interface AppState {
   setDrawerOpen: (open: boolean) => void;
   setAr: (enabled: boolean) => void;
   setArSupported: (supported: boolean) => void;
+  setCompassStatus: (status: CompassStatus) => void;
   toggleNightMode: () => void;
   toggleTrails: () => void;
   setSun: (sun: SunState) => void;
@@ -75,6 +78,7 @@ export const useAppStore = create<AppState>((set) => ({
   drawerOpen: false,
   arEnabled: false,
   arSupported: false,
+  compassStatus: 'unknown',
   nightMode: false,
   showTrails: true,
   sun: { altitudeDeg: -18, azimuthDeg: 0, phase: 'night', daylight: 0 },
@@ -99,6 +103,7 @@ export const useAppStore = create<AppState>((set) => ({
   setDrawerOpen: (drawerOpen) => set({ drawerOpen }),
   setAr: (arEnabled) => set({ arEnabled }),
   setArSupported: (arSupported) => set({ arSupported }),
+  setCompassStatus: (compassStatus) => set({ compassStatus }),
   toggleNightMode: () => set((state) => ({ nightMode: !state.nightMode })),
   toggleTrails: () => set((state) => ({ showTrails: !state.showTrails })),
   setSun: (sun) => set({ sun }),
