@@ -227,6 +227,22 @@ const Utils = {
     return `${m}:${s.toString().padStart(2, '0')}`;
   },
 
+  /** Calculate sun elevation for a given date/location */
+  getSunElevation(date, lat, lon) {
+    const rad = Math.PI / 180;
+    const d = (date.getTime() / 86400000) - 10957.5; // days since J2000
+    const g = (357.529 + 0.98560028 * d) % 360;
+    const q = (280.459 + 0.98564736 * d) % 360;
+    const L = (q + 1.915 * Math.sin(g * rad) + 0.020 * Math.sin(2 * g * rad)) % 360;
+    const e = 23.439 - 0.00000036 * d;
+    const dec = Math.asin(Math.sin(e * rad) * Math.sin(L * rad));
+    let ra = Math.atan2(Math.cos(e * rad) * Math.sin(L * rad), Math.cos(L * rad));
+    const gmst = (18.697374558 + 24.06570982441908 * d) % 24;
+    const lha = (gmst * 15 + lon) * rad - ra;
+    const el = Math.asin(Math.sin(lat * rad) * Math.sin(dec) + Math.cos(lat * rad) * Math.cos(dec) * Math.cos(lha));
+    return el / rad;
+  },
+
   /** Signal quality bars (1-5) as HTML */
   qualityBars(q) {
     let bars = '';
@@ -728,14 +744,21 @@ const PropagationModule = {
           const setAz = az;
           const duration = (setTime - riseTime) / 1000; // seconds
 
-          // Signal quality: based on max elevation
+          // Signal quality: based on max elevation and time of day
           // >60° = excellent (5), >40° = great (4), >20° = good (3), >10° = fair (2), else poor (1)
           let quality;
-          if (maxEl >= 60) quality = 5;
-          else if (maxEl >= 40) quality = 4;
-          else if (maxEl >= 20) quality = 3;
-          else if (maxEl >= 10) quality = 2;
-          else quality = 1;
+          const sunEl = Utils.getSunElevation(maxElTime, State.observer.lat, State.observer.lon);
+          
+          if (sunEl > -6) {
+            // Daylight or bright twilight - satellite not visible
+            quality = 0;
+          } else {
+            if (maxEl >= 60) quality = 5;
+            else if (maxEl >= 40) quality = 4;
+            else if (maxEl >= 20) quality = 3;
+            else if (maxEl >= 10) quality = 2;
+            else quality = 1;
+          }
 
           passes.push({
             riseTime,
@@ -1544,16 +1567,28 @@ const UIModule = {
       const elStr = sat.computed.el > -90 ? sat.computed.el.toFixed(1) + '°' : '—';
       const azStr = sat.computed.az ? sat.computed.az.toFixed(0) + '°' : '—';
       const isSelected = State.selectedSat === sat;
+      const sunEl = Utils.getSunElevation(new Date(), State.observer.lat, State.observer.lon);
+      const isDark = sunEl <= -6;
+      const actuallyVisible = vis && isDark;
+      
+      let listQuality = 0;
+      if (above && isDark) {
+        if (sat.computed.el >= 60) listQuality = 5;
+        else if (sat.computed.el >= 40) listQuality = 4;
+        else if (sat.computed.el >= 20) listQuality = 3;
+        else if (sat.computed.el >= 10) listQuality = 2;
+        else listQuality = 1;
+      }
 
       return `<li class="sat-item${isSelected ? ' selected' : ''}" data-name="${sat.name}" role="option" aria-selected="${isSelected}">
         <span class="sat-item__dot ${dotClass}"></span>
         <div class="sat-item__info">
           <div class="sat-item__name">${sat.name}</div>
-          <div class="sat-item__sub">${Utils.azToCardinal(sat.computed.az)} ${azStr} · ${sat.tag.toUpperCase()}${vis ? ' · <span class="vis-badge">SICHTBAR</span>' : ''}</div>
+          <div class="sat-item__sub">${Utils.azToCardinal(sat.computed.az)} ${azStr} · ${sat.tag.toUpperCase()}${actuallyVisible ? ' · <span class="vis-badge">SICHTBAR</span>' : ''}</div>
         </div>
         <div class="sat-item__right">
           <span class="sat-item__el">${elStr}</span>
-          ${above ? Utils.qualityBars(sat.computed.el >= 60 ? 5 : sat.computed.el >= 40 ? 4 : sat.computed.el >= 20 ? 3 : sat.computed.el >= 10 ? 2 : 1) : ''}
+          ${above ? Utils.qualityBars(listQuality) : ''}
         </div>
       </li>`;
     }).join('');
@@ -1593,6 +1628,10 @@ const UIModule = {
       const above = sat.computed.el > 0;
       const isSelected = State.selectedSat === sat;
 
+      const sunEl = Utils.getSunElevation(new Date(), State.observer.lat, State.observer.lon);
+      const isDark = sunEl <= -6;
+      const actuallyVisible = vis && isDark;
+
       // Update dot
       const dot = li.querySelector('.sat-item__dot');
       if (dot) {
@@ -1603,13 +1642,31 @@ const UIModule = {
       const sub = li.querySelector('.sat-item__sub');
       if (sub) {
         const azStr = sat.computed.az ? sat.computed.az.toFixed(0) + '°' : '—';
-        sub.innerHTML = `${Utils.azToCardinal(sat.computed.az)} ${azStr} · ${sat.tag.toUpperCase()}${vis ? ' · <span class="vis-badge">SICHTBAR</span>' : ''}`;
+        sub.innerHTML = `${Utils.azToCardinal(sat.computed.az)} ${azStr} · ${sat.tag.toUpperCase()}${actuallyVisible ? ' · <span class="vis-badge">SICHTBAR</span>' : ''}`;
       }
 
       // Update elevation
       const elSpan = li.querySelector('.sat-item__el');
       if (elSpan) {
         elSpan.textContent = sat.computed.el > -90 ? sat.computed.el.toFixed(1) + '°' : '—';
+      }
+      
+      // Update bars if they exist
+      if (above) {
+        const barsSpan = li.querySelector('.signal-bars');
+        if (barsSpan) {
+          let listQuality = 0;
+          if (isDark) {
+            if (sat.computed.el >= 60) listQuality = 5;
+            else if (sat.computed.el >= 40) listQuality = 4;
+            else if (sat.computed.el >= 20) listQuality = 3;
+            else if (sat.computed.el >= 10) listQuality = 2;
+            else listQuality = 1;
+          }
+          barsSpan.outerHTML = Utils.qualityBars(listQuality);
+        } else {
+           // We might need to inject them, but it's easier to just do full rebuild if state changed from below to above
+        }
       }
 
       // Update selected state
@@ -1663,48 +1720,57 @@ const UIModule = {
         : 'Kein GPS';
 
     // Compute multiple upcoming passes (async to avoid frame drops)
-    document.getElementById('telPass').innerHTML = '<span class="pass-loading">Berechne Überflüge…</span>';
-    setTimeout(() => {
-      if (State.selectedSat !== sat) return;
-      const passes = PropagationModule.estimatePasses(sat, 5);
-      const passEl = document.getElementById('telPass');
-      if (!passes.length) {
-        passEl.innerHTML = '<span class="pass-none">Kein Überflug in den nächsten 24h</span>';
-        return;
-      }
+    const passEl = document.getElementById('telPass');
+    if (State._lastPassSat === sat && State._lastPassHtml && Date.now() - (State._lastPassTime || 0) < 60000) {
+      // Reuse cached HTML to prevent flicker on every tick
+      passEl.innerHTML = State._lastPassHtml;
+    } else {
+      passEl.innerHTML = '<span class="pass-loading">Berechne Überflüge…</span>';
+      setTimeout(() => {
+        if (State.selectedSat !== sat) return;
+        const passes = PropagationModule.estimatePasses(sat, 5);
+        
+        let html = '';
+        if (!passes.length) {
+          html = '<span class="pass-none">Kein Überflug in den nächsten 24h</span>';
+        } else {
+          const timeFmt = { hour: '2-digit', minute: '2-digit', second: '2-digit' };
+          const dateFmt = { weekday: 'short', day: 'numeric', month: 'short' };
 
-      const timeFmt = { hour: '2-digit', minute: '2-digit', second: '2-digit' };
-      const dateFmt = { weekday: 'short', day: 'numeric', month: 'short' };
+          let lastDateStr = '';
+          for (const pass of passes) {
+            const dateStr = pass.riseTime.toLocaleDateString('de-DE', dateFmt);
+            if (dateStr !== lastDateStr) {
+              html += `<div class="pass-date">${dateStr}</div>`;
+              lastDateStr = dateStr;
+            }
 
-      let html = '';
-      let lastDateStr = '';
-      for (const pass of passes) {
-        const dateStr = pass.riseTime.toLocaleDateString('de-DE', dateFmt);
-        if (dateStr !== lastDateStr) {
-          html += `<div class="pass-date">${dateStr}</div>`;
-          lastDateStr = dateStr;
+            const rise = pass.riseTime.toLocaleTimeString('de-DE', timeFmt);
+            const set  = pass.setTime ? pass.setTime.toLocaleTimeString('de-DE', timeFmt) : '?';
+            const dur  = Utils.formatDuration(pass.duration);
+            const bars = Utils.qualityBars(pass.quality);
+
+            html += `<div class="pass-card">
+              <div class="pass-header">
+                <span class="pass-time">${rise}</span>
+                <span class="pass-dur">Dauer ${dur}</span>
+                ${bars}
+              </div>
+              <table class="pass-table">
+                <tr><th></th><th>Beginn</th><th>Max.</th><th>Ende</th></tr>
+                <tr><td>Richtung</td><td>${pass.riseDir}</td><td>${pass.maxDir}</td><td>${pass.setDir}</td></tr>
+                <tr><td>Höhe</td><td>${Math.round(pass.maxEl > 0 ? Math.min(pass.maxEl * 0.3, 15) : 0)}°</td><td>${pass.maxEl.toFixed(0)}°</td><td>${Math.round(pass.maxEl > 0 ? Math.min(pass.maxEl * 0.2, 10) : 0)}°</td></tr>
+              </table>
+            </div>`;
+          }
         }
-
-        const rise = pass.riseTime.toLocaleTimeString('de-DE', timeFmt);
-        const set  = pass.setTime ? pass.setTime.toLocaleTimeString('de-DE', timeFmt) : '?';
-        const dur  = Utils.formatDuration(pass.duration);
-        const bars = Utils.qualityBars(pass.quality);
-
-        html += `<div class="pass-card">
-          <div class="pass-header">
-            <span class="pass-time">${rise}</span>
-            <span class="pass-dur">Dauer ${dur}</span>
-            ${bars}
-          </div>
-          <table class="pass-table">
-            <tr><th></th><th>Beginn</th><th>Max.</th><th>Ende</th></tr>
-            <tr><td>Richtung</td><td>${pass.riseDir}</td><td>${pass.maxDir}</td><td>${pass.setDir}</td></tr>
-            <tr><td>Höhe</td><td>${Math.round(pass.maxEl > 0 ? Math.min(pass.maxEl * 0.3, 15) : 0)}°</td><td>${pass.maxEl.toFixed(0)}°</td><td>${Math.round(pass.maxEl > 0 ? Math.min(pass.maxEl * 0.2, 10) : 0)}°</td></tr>
-          </table>
-        </div>`;
-      }
-      passEl.innerHTML = html;
-    }, 100);
+        
+        State._lastPassSat = sat;
+        State._lastPassHtml = html;
+        State._lastPassTime = Date.now();
+        passEl.innerHTML = html;
+      }, 50);
+    }
   },
 };
 
