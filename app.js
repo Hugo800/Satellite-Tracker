@@ -27,6 +27,7 @@ const CONFIG = {
     { name: 'stations',  label: 'Raumstationen',  url: 'https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle', tag: 'iss'      },
     { name: 'visual',    label: '100 Hellste',    url: 'https://celestrak.org/NORAD/elements/gp.php?GROUP=visual&FORMAT=tle',   tag: 'visual'  },
     { name: 'starlink',  label: 'Starlink',       url: 'https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=tle', tag: 'starlink' },
+    { name: 'active',    label: 'Alle Aktiven',   url: 'https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle',   tag: 'other'  },
   ],
   // Fallback hard-coded TLEs (always shown even without network)
   FALLBACK_TLES: [
@@ -360,23 +361,20 @@ const TLEModule = {
     State.satellites = [];
     const counts = {};
 
+    const seenIds = new Set();
+
     for (const raw of rawArray) {
       try {
+        const noradId = raw.l2.split(' ')[1];
+        if (seenIds.has(noradId)) continue;
+        seenIds.add(noradId);
+
         const tag = raw.tag || 'other';
         counts[tag] = (counts[tag] || 0) + 1;
 
-        // CRITICAL PERFORMANCE FIX: Starlink has >6000 satellites.
-        // To show a realistic sky, we sample every 20th satellite 
-        // instead of just taking the first 200 (which are all in one old orbit).
-        if (tag === 'starlink') {
-          if (counts[tag] % 25 !== 0) continue; // Take ~1 in 25 (yields ~240 out of 6000)
-          if (counts[tag] > 10000) continue; // Hard cap
-        }
-        if (counts[tag] > 400 && tag !== 'starlink') continue; // Safety limit for other huge groups
-
         const satrec = satellite.twoline2satrec(raw.l1, raw.l2);
         if (satrec.error !== 0) continue;
-        const noradId = raw.l2.split(' ')[1];
+        
         State.satellites.push({
           name:     raw.name,
           satrec,
@@ -622,8 +620,10 @@ const TouchModule = {
    PROPAGATION MODULE
    ═══════════════════════════════════════════════════════════════ */
 const PropagationModule = {
-  update() {
-    if (!State.observer.valid) return;
+  _propIndex: 0,
+
+  tick() {
+    if (!State.observer.valid || State.satellites.length === 0) return;
 
     const now = new Date();
     const gmst = satellite.gstime(now);
@@ -631,7 +631,12 @@ const PropagationModule = {
                                            latitude:  State.observer.lat * Utils.DEG,
                                            height:    State.observer.alt });
 
-    for (const sat of State.satellites) {
+    // Propagate up to 250 satellites per frame (~15,000 per second at 60 FPS)
+    const BATCH_SIZE = 250;
+    const endIdx = Math.min(this._propIndex + BATCH_SIZE, State.satellites.length);
+
+    for (let i = this._propIndex; i < endIdx; i++) {
+      const sat = State.satellites[i];
       try {
         const pv = satellite.propagate(sat.satrec, now);
         if (!pv.position) { sat.computed.visible = false; continue; }
@@ -675,6 +680,26 @@ const PropagationModule = {
       } catch(e) {
         sat.computed.visible = false;
       }
+    }
+
+    this._propIndex = endIdx;
+    
+    // When we finish a full cycle over all satellites, trigger UI updates
+    if (this._propIndex >= State.satellites.length) {
+      this._propIndex = 0;
+      UIModule.updateSatChip();
+      UIModule.renderSatList();
+      
+      // Periodically rebuild the list if 'visible' filter is active
+      if (State.activeFilter === 'visible') {
+        const ts = Date.now();
+        if (!State._lastFullRebuild || ts - State._lastFullRebuild > 10000) {
+          State._lastFullRebuild = ts;
+          UIModule.applyFilter();
+        }
+      }
+      
+      if (State.selectedSat) UIModule.updateTelemetry(State.selectedSat);
     }
   },
 
@@ -1819,24 +1844,8 @@ const App = {
     const viewAz = State.gyroEnabled ? State.gyroAz : State.viewAz;
     const viewEl = State.gyroEnabled ? State.gyroEl : State.viewEl;
 
-    // Propagate at fixed intervals
-    if (ts - State.lastPropTime >= CONFIG.UPDATE_INTERVAL_MS) {
-      State.lastPropTime = ts;
-      PropagationModule.update();
-      UIModule.updateSatChip();
-      UIModule.renderSatList();  // lightweight in-place update, no flicker
-
-      // For the "visible" filter, periodically rebuild the list since
-      // satellites can rise/set and need to be added/removed
-      if (State.activeFilter === 'visible') {
-        if (!State._lastFullRebuild || ts - State._lastFullRebuild > 10000) {
-          State._lastFullRebuild = ts;
-          UIModule.applyFilter();
-        }
-      }
-
-      if (State.selectedSat) UIModule.updateTelemetry(State.selectedSat);
-    }
+    // Propagate a chunk of satellites every frame (time-slicing)
+    PropagationModule.tick();
 
     // Always render
     SkyRenderer.draw();
