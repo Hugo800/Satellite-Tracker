@@ -65,6 +65,7 @@ export function TopBar(): React.JSX.Element {
   const toggleTrails = useAppStore((s) => s.toggleTrails);
   const setDrawerOpen = useAppStore((s) => s.setDrawerOpen);
   const errors = useAppStore((s) => s.errors);
+  const geoError = useAppStore((s) => s.geoError);
 
   const { enable, disable } = useDeviceOrientation();
   const headingRef = useRef<HTMLSpanElement>(null);
@@ -211,9 +212,18 @@ export function TopBar(): React.JSX.Element {
         </div>
       )}
 
-      {errors.slice(-2).map((message) => (
+      {geoError && (
+        <div className="pointer-events-none flex max-w-[92vw] items-start gap-1.5 self-start rounded-md border border-amber-400/30 bg-amber-950/40 px-2 py-1 text-[10px] text-amber-200">
+          <MapPin size={11} className="mt-px shrink-0" />
+          <span>{geoError}</span>
+        </div>
+      )}
+
+      {/* Gleiche Meldung kann mehrfach auflaufen (Retry pro Gruppe) – daher
+          Position statt Text als React-Key. */}
+      {errors.slice(-2).map((message, i) => (
         <div
-          key={message}
+          key={`${i}-${message}`}
           className="pointer-events-none flex max-w-[92vw] items-start gap-1.5 self-start rounded-md border border-rose-400/30 bg-rose-950/50 px-2 py-1 text-[10px] text-rose-200"
         >
           <AlertTriangle size={11} className="mt-px shrink-0" />

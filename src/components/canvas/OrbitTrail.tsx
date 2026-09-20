@@ -23,6 +23,9 @@ export function OrbitTrail(): React.JSX.Element | null {
   const selectedIndex = useAppStore((s) => s.selectedIndex);
   const showTrails = useAppStore((s) => s.showTrails);
 
+  const selectedRef = useRef(selectedIndex);
+  selectedRef.current = selectedIndex;
+
   const { points, colors } = useMemo(() => {
     const pts: Vector3[] = [];
     const cols: Color[] = [];
@@ -55,7 +58,9 @@ export function OrbitTrail(): React.JSX.Element | null {
     seenVersion.current = trailState.version;
 
     const source = trailState.points;
-    if (!source || source.length !== SAMPLES * 3) {
+    // Eine verzögerte Antwort kann noch zum vorher gewählten Objekt gehören –
+    // sie darf nicht als Bahn des aktuellen Satelliten gezeichnet werden.
+    if (!source || source.length !== SAMPLES * 3 || trailState.index !== selectedRef.current) {
       line.visible = false;
       return;
     }

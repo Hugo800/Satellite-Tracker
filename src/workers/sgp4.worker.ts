@@ -70,15 +70,19 @@ function parseTle(text: string, group: SatelliteGroup, limit: number): void {
     .map((l) => l.trimEnd())
     .filter((l) => l.length > 0);
 
+  // Mengen-Lookup statt linearer Suche: Starlink allein bringt einige tausend
+  // Sätze mit, ein `some()` pro Zeile wäre quadratisch.
+  const knownIds = new Set(entries.map((e) => e.meta.noradId));
+
   let added = 0;
-  for (let i = 0; i + 2 < lines.length + 1 && added < limit; i += 3) {
+  for (let i = 0; i + 2 < lines.length && added < limit; i += 3) {
     const name = lines[i];
     const l1 = lines[i + 1];
     const l2 = lines[i + 2];
     if (!name || !l1 || !l2 || !l1.startsWith('1 ') || !l2.startsWith('2 ')) continue;
 
     const noradId = l1.slice(2, 7).trim();
-    if (entries.some((e) => e.meta.noradId === noradId)) continue;
+    if (knownIds.has(noradId)) continue;
 
     let satrec: SatRec;
     try {
@@ -91,6 +95,7 @@ function parseTle(text: string, group: SatelliteGroup, limit: number): void {
     const meanMotionRadMin = satrec.no;
     const periodMin = meanMotionRadMin > 0 ? (2 * Math.PI) / meanMotionRadMin : 0;
 
+    knownIds.add(noradId);
     entries.push({
       satrec,
       meta: {
@@ -300,7 +305,7 @@ function tick(): void {
 
 function buildTrail(index: number, fromMin: number, toMin: number, samples: number): void {
   const entry = entries[index];
-  if (!entry || !observer) return;
+  if (!entry || !observer || samples < 2) return;
 
   const points = new Float32Array(samples * 3);
   const spanMs = (toMin - fromMin) * 60_000;
@@ -349,7 +354,9 @@ ctx.onmessage = (event: MessageEvent<WorkerRequest>) => {
       break;
 
     case 'timeScale':
-      virtualTimeMs = timeScale === 1 && msg.value === 1 ? Date.now() : virtualTimeMs;
+      // Zurück auf Echtzeit heißt: wieder auf die Wanduhr aufsetzen. Sonst
+      // behielte die Szene den Vorlauf, den der Zeitraffer angesammelt hat.
+      if (msg.value === 1) virtualTimeMs = Date.now();
       lastRealMs = Date.now();
       timeScale = msg.value;
       break;

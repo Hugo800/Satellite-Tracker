@@ -125,6 +125,13 @@ export function SatelliteField({
     colorSelected: null,
   });
 
+  // Ein Katalogwechsel vergibt die Telemetrie-Indizes neu: Die gepufferten
+  // Vorgängerwinkel gehören dann zu anderen Objekten und würden einen Frame
+  // lang quer über den Himmel interpolieren.
+  useEffect(() => {
+    interpolator.current.revision = -1;
+  }, [catalog]);
+
   useEffect(() => {
     const mesh = meshRef.current;
     if (!mesh) return;
