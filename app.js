@@ -1909,9 +1909,24 @@ const App = {
       navigator.serviceWorker.register('sw.js')
         .then(reg => console.log('SW registered, scope:', reg.scope))
         .catch(err => console.warn('SW registration failed:', err));
+
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!refreshing) {
+          refreshing = true;
+          window.location.reload();
+        }
+      });
     }
   },
 };
 
 
 
+
+/* ── Bootstrap ─────────────────────────────────────────────── */
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => App.init());
+} else {
+  App.init();
+}
