@@ -25,10 +25,8 @@
 const CONFIG = {
   TLE_GROUPS: [
     { name: 'stations',  label: 'Raumstationen',  url: 'https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle', tag: 'iss'      },
-    { name: 'hubble',    label: 'Hubble',          url: 'https://celestrak.org/NORAD/elements/gp.php?CATNR=20580&FORMAT=tle',    tag: 'special'  },
-    { name: 'noaa',      label: 'NOAA',            url: 'https://celestrak.org/NORAD/elements/gp.php?GROUP=noaa&FORMAT=tle',     tag: 'weather'  },
-    { name: 'starlink',  label: 'Starlink',        url: 'https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=tle', tag: 'starlink' },
-    { name: 'weather',   label: 'Wettersats.',     url: 'https://celestrak.org/NORAD/elements/gp.php?GROUP=weather&FORMAT=tle',  tag: 'weather'  },
+    { name: 'visual',    label: '100 Hellste',    url: 'https://celestrak.org/NORAD/elements/gp.php?GROUP=visual&FORMAT=tle',   tag: 'visual'  },
+    { name: 'starlink',  label: 'Starlink',       url: 'https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=tle', tag: 'starlink' },
   ],
   // Fallback hard-coded TLEs (always shown even without network)
   FALLBACK_TLES: [
@@ -400,8 +398,8 @@ const TLEModule = {
           let fbTag = 'other';
           const n = fb.name.toLowerCase();
           if (n.includes('starlink')) fbTag = 'starlink';
-          else if (n.includes('iss') || n.includes('zarya')) fbTag = 'iss';
-          else if (n.includes('noaa') || n.includes('terra')) fbTag = 'weather';
+          else if (n.includes('iss') || n.includes('zarya') || n.includes('css')) fbTag = 'iss';
+          else if (n.includes('noaa') || n.includes('terra') || n.includes('hubble') || n.includes('envisat')) fbTag = 'visual';
 
           State.satellites.push({
             name: fb.name, satrec, tag: fbTag,
@@ -1108,8 +1106,7 @@ const SkyRenderer = {
       if (isSelected)              { color = '#00ff88'; glowColor = '#00ff88'; }
       else if (tag === 'iss')      { color = '#00e6ff'; glowColor = '#00e6ff'; }
       else if (tag === 'starlink') { color = '#aa99ff'; glowColor = '#8877dd'; }
-      else if (tag === 'weather')  { color = '#ffcc44'; glowColor = '#ffaa00'; }
-      else if (tag === 'special')  { color = '#ff77cc'; glowColor = '#ff55aa'; }
+      else if (tag === 'visual')   { color = '#ffcc44'; glowColor = '#ffaa00'; }
       else                         { color = '#55bbff'; glowColor = '#3399dd'; }
     }
 
