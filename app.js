@@ -284,7 +284,7 @@ const GeoModule = {
     };
     UIModule.updateGeoChip(true);
     UIModule.showPermStatus('Standort aktiv ✓');
-    PropagationModule.update();
+    PropagationModule.forceFullUpdate();
   },
 
   _onError(err) {
@@ -410,7 +410,7 @@ const TLEModule = {
     }
     console.log(`Loaded ${State.satellites.length} satellites`);
     State.filteredSats = [...State.satellites];
-    PropagationModule.update();
+    PropagationModule.forceFullUpdate();
     UIModule.renderSatList();
     UIModule.updateSatChip();
   },
@@ -621,6 +621,59 @@ const TouchModule = {
    ═══════════════════════════════════════════════════════════════ */
 const PropagationModule = {
   _propIndex: 0,
+
+  forceFullUpdate() {
+    if (!State.observer.valid || State.satellites.length === 0) return;
+    const now = new Date();
+    const gmst = satellite.gstime(now);
+    const obs  = satellite.geodeticToEcf({ longitude: State.observer.lon * Utils.DEG,
+                                           latitude:  State.observer.lat * Utils.DEG,
+                                           height:    State.observer.alt });
+
+    for (let i = 0; i < State.satellites.length; i++) {
+      const sat = State.satellites[i];
+      try {
+        const pv = satellite.propagate(sat.satrec, now);
+        if (!pv.position) { sat.computed.visible = false; continue; }
+
+        const posEcf = satellite.eciToEcf(pv.position, gmst);
+        const look   = satellite.ecfToLookAngles(
+          { longitude: State.observer.lon * Utils.DEG,
+            latitude:  State.observer.lat * Utils.DEG,
+            height:    State.observer.alt },
+          posEcf
+        );
+
+        const azDeg = look.azimuth   * (180 / Math.PI);
+        const elDeg = look.elevation * (180 / Math.PI);
+
+        const dx = pv.position.x - obs.x;
+        const dy = pv.position.y - obs.y;
+        const dz = pv.position.z - obs.z;
+        const rangekm = Math.sqrt(dx*dx + dy*dy + dz*dz);
+
+        const altKm = Math.sqrt(
+          pv.position.x**2 + pv.position.y**2 + pv.position.z**2
+        ) - 6371;
+
+        const vel = pv.velocity
+          ? Math.sqrt(pv.velocity.x**2 + pv.velocity.y**2 + pv.velocity.z**2)
+          : 0;
+
+        sat.computed = {
+          az:      (azDeg + 360) % 360,
+          el:      elDeg,
+          range:   rangekm,
+          alt:     altKm,
+          vel:     vel,  // km/s
+          visible: elDeg >= CONFIG.VISIBLE_EL_MIN,
+        };
+        this._updateTrail(sat, azDeg, elDeg);
+      } catch(e) {
+        sat.computed.visible = false;
+      }
+    }
+  },
 
   tick() {
     if (!State.observer.valid || State.satellites.length === 0) return;
@@ -1342,6 +1395,7 @@ const RadarRenderer = {
   draw() {
     const ctx = this.ctx;
     const size = this.canvas.parentElement.offsetWidth;
+    if (size === 0) return; // Prevent negative radius when hidden
     const cx = size / 2, cy = size / 2;
     const maxR = size / 2 - 4;
 
