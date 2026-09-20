@@ -1,137 +1,67 @@
-# 🛰 SatTracker – Interaktiver Sternenatlas
+# Orbital Atlas
 
-Eine vollständige, mobile-first **Progressive Web App** (PWA) als Single-Page-Anwendung, die wie ein interaktiver Sternenatlas funktioniert und Satelliten in Echtzeit über dem aktuellen Standort trackt.
+Mobile-first PWA – ein interaktiver 3D-Sternenatlas, der Satelliten in Echtzeit über dem
+Standort des Nutzers trackt.
 
-[![GitHub Pages ready](https://img.shields.io/badge/GitHub%20Pages-Ready-brightgreen)](#deployment)
-[![PWA](https://img.shields.io/badge/PWA-Installierbar-blue)](#pwa)
-[![No API Key](https://img.shields.io/badge/API--Key-Keiner%20nötig-success)](#data-sources)
+## Features
 
----
+- **3D-Himmelskugel** – invertierte Sphäre (`BackSide`), Kamera exakt im Ursprung `(0, 0, 0)`.
+- **Touch-Navigation** – OrbitControls zum Schwenken, Pinch/Wheel verändert die Brennweite (FOV).
+- **AR-Modus** – `DeviceOrientationEvent` inkl. `requestPermission()`-Dialog für iOS Safari;
+  Euler → Quaternion-Mapping direkt in `useFrame` (kein Gimbal Lock).
+- **SGP4 im Web Worker** – `satellite.js` propagiert den gesamten Katalog mit 10 Hz;
+  der Main-Thread erhält nur transferable `Float32Array`-Buffer.
+- **GPU-Massendarstellung** – ein `THREE.InstancedMesh` für alle Katalogobjekte,
+  eigene Meshes + Labels für ISS, Hubble und Tiangong.
+- **Erdschatten-Logik** – Zylinderschattenmodell gegen den Sonnenvektor; verfinsterte
+  Satelliten werden abgedunkelt.
+- **Dynamischer Himmel** – Tag/Dämmerung/Nacht per Shader anhand des Sonnenstands
+  (`astronomy-engine`), prozeduraler Sternenhimmel mit Spektralfarben und Szintillation.
+- **Polar-Radar** – Zenit im Mittelpunkt, Horizont am Rand, inkl. Kamera-FOV-Kegel.
+- **Telemetrie-HUD** – Elevation, Azimut, Distanz, Bahnhöhe, Geschwindigkeit, Subpunkt
+  sowie AOS/TCA/LOS-Vorhersage für die nächsten 48 h.
+- **Astronomischer Nachtmodus** – Monochrom-Rotlicht über UI *und* WebGL-Canvas.
 
-## ✨ Features
+## Architektur-Prinzip
 
-### 🌌 Interaktiver Himmelsdom
-- **360°-Gnomonic-Projektion** des Himmels auf dem Display
-- **Himmelsrichtungen** (N/O/S/W) und Höhenkreise (0°/30°/60°/90° Zenith)
-- **Dynamischer Sternenhintergrund** mit ~400 Sternen
-- **Orbitspuren** (40-Punkte-Verlaufsspur) für sichtbare Satelliten
-- **Echtzeit-Telemetrie** direkt im Dome: Azimut, Elevation, Name
-
-### 🛰 Satelliten-Tracking
-- **10 Satellitengruppen** via Celestrak: ISS, Tiangong, Hubble, NOAA, Starlink, Terra, Aqua u.a.
-- **SGP4-Bahnberechnung** via `satellite.js` vollständig im Browser
-- **Echtzeit-Update** jede Sekunde (requestAnimationFrame-Loop)
-- **10 Fallback-TLEs** garantieren Funktion ohne Internet
-
-### 📱 Steuerung
-| Eingabe | Aktion |
-|---------|--------|
-| Drag (1 Finger / Maus) | Himmelsdom drehen |
-| Pinch / Mausrad | Zoom (FoV 15°–150°) |
-| Tap auf Satellit | Telemetrie öffnen |
-| Gyroskop (optional) | Automatische AR-Ansicht |
-
-### 🔭 Gyroskop / AR-Modus
-- **DeviceOrientationEvent** mit iOS 13+ Permission-Flow
-- Hält sich das Smartphone Richtung Himmel, dreht sich der Dome automatisch mit
-- Kompass-Heading (Alpha) + Tilt (Beta) → Azimut + Elevation
-
-### 🌙 Nachtsicht-Modus
-- Rotes Farbschema zum Erhalt der Dunkeladaption beim Sternbeobachten
-- Ein Knopfdruck wechselt alle Elemente (Canvas, HUD, Panels)
-
-### 📡 Radar Mini-Map
-- Polarer Übersichts-Plot (North-up, Elevation-Ringe)
-- Alle Satelliten über dem Horizont auf einen Blick
-- Farbcodierung: ISS=Cyan, Starlink=Lila, NOAA=Amber
-
-### 📋 Telemetrie-Panel
-- Azimut, Elevation, Entfernung (km), Bahnhöhe (km), Geschwindigkeit (km/h)
-- Sichtbarkeitsstatus (🟢 Sichtbar / 🟡 Horizont / 🔴 Unter Horizont)
-- **Pass-Vorschau**: nächster Auf- und Untergang + maximale Elevation
-
----
-
-## 🏗 Architektur
+Winkel, Positionen und Quaternionen liegen **nie** im React-State. Sie werden in
+`src/state/runtime.ts` als Modulzustand gehalten und ausschließlich in `useFrame`
+bzw. in eigenen rAF-Schleifen der 2D-Overlays gelesen/mutiert. React-State ist
+Konfiguration (Katalog, Filter, Auswahl, Sonnenstand) vorbehalten.
 
 ```
-sattracker/
-├── index.html        # HTML-Shell, Canvas-Elemente, Overlay-Panels
-├── style.css         # Sci-Fi Dark Theme, CSS Custom Properties, Night-Mode
-├── app.js            # Gesamte App-Logik (modulare Sections)
-│   ├── CONFIG        # Tuneable Konstanten
-│   ├── State         # Shared mutable state
-│   ├── Utils         # Gnomonic-Projektion, Mathe-Helfer
-│   ├── GeoModule     # navigator.geolocation watchPosition
-│   ├── TLEModule     # Fetch + sessionStorage-Cache + Fallback
-│   ├── OrientationModule # DeviceOrientationEvent + iOS-Permission
-│   ├── TouchModule   # Pointer Events (Drag, Pinch, Click)
-│   ├── PropagationModule # satellite.js SGP4 + Pass-Berechnung
-│   ├── StarField     # Statisches Sternenfeld (400 Sterne)
-│   ├── SkyRenderer   # Canvas 2D Himmelsdom-Renderer
-│   ├── RadarRenderer # Polarer Mini-Plot Canvas
-│   ├── UIModule      # Panels, Liste, Telemetrie, Toasts
-│   └── App           # Bootstrap + rAF-Loop
-├── manifest.json     # PWA Manifest
-├── sw.js             # Service Worker (Cache-First + Network-First)
-└── icons/
-    ├── icon-192.png
-    └── icon-512.png
+src/
+  components/canvas/   R3F-Szene (Dome, Sterne, Gitter, Satelliten, Trail, Kamera, Picking)
+  components/ui/       HUD, Radar, Telemetrie, Drawer
+  hooks/               Geolocation, DeviceOrientation, Worker-Bridge, Sonnenstand
+  math/                Koordinaten, Sonnenvektor, SGP4-Wrapper, Pass-Vorhersage
+  state/               Zustand-Store (React) + Laufzeit-Refs (Nicht-React)
+  workers/             SGP4-Worker
 ```
 
----
+## Entwicklung
 
-## 🚀 Deployment
-
-### GitHub Pages (empfohlen)
 ```bash
-git add .
-git commit -m "feat: initial SatTracker PWA"
-git push origin main
-# → Settings → Pages → main branch / root
+npm install
+npm run dev        # http://localhost:5173
+npm run build      # tsc -b && vite build
+npm run preview
 ```
 
-### Lokal (Development)
-```bash
-# Option 1: npx
-npx serve .
+> Geolocation und Bewegungssensoren benötigen einen sicheren Kontext.
+> `localhost` gilt als sicher; im LAN (`--host`) ist HTTPS erforderlich.
 
-# Option 2: Python
-python3 -m http.server 8080
+## Deployment auf GitHub Pages
 
-# Option 3: VS Code Live Server
-```
-> ⚠️ **HTTPS erforderlich** für Geolocation und DeviceOrientation API. Lokal funktioniert `localhost`, für Mobilgeräte im Netz → GitHub Pages oder ngrok.
+`vite.config.ts` nutzt `base: './'`, die Anwendung läuft damit unter jedem
+Unterpfad ohne Rebuild.
 
----
+1. Repository → **Settings → Pages → Source: GitHub Actions**
+2. Push auf `main` – `.github/workflows/deploy.yml` baut und veröffentlicht automatisch.
 
-## 📡 Datenquellen
+## Datenquelle
 
-| Gruppe | Quelle | CORS |
-|--------|--------|------|
-| Raumstationen (ISS, Tiangong) | Celestrak | ✅ |
-| Hubble | Celestrak (CATNR 20580) | ✅ |
-| NOAA-Satelliten | Celestrak | ✅ |
-| Starlink | Celestrak | ✅ |
-| Wettersatelliten | Celestrak | ✅ |
-
-TLE-Daten werden im `sessionStorage` für 4 Stunden gecacht. Offline-Betrieb wird durch 10 hardcodierte Fallback-TLEs garantiert.
-
----
-
-## 🛠 Technologien
-
-- **HTML5 / CSS3 / Vanilla JavaScript** – keine Frameworks
-- **[satellite.js 4.1.3](https://github.com/shashwatak/satellite-js)** – SGP4-Bahnberechnung
-- **Canvas 2D API** – Rendering (kein WebGL benötigt)
-- **Pointer Events API** – Unified Touch + Mouse
-- **DeviceOrientation API** – Gyroskop / Kompass
-- **Service Worker + Cache API** – PWA / Offline
-- **navigator.geolocation** – GPS-Standort
-
----
-
-## 📜 Lizenz
-
-MIT © 2026
-
+TLE-Kataloge von [CelesTrak](https://celestrak.org) (`stations`, `visual`, `weather`,
+`starlink`). CelesTrak beantwortet Wiederholungsabrufe innerhalb des zweistündigen
+Update-Intervalls mit HTTP 403 – der Worker greift dann auf seine eigene
+CacheStorage-Kopie zurück; offline existiert zusätzlich ein Minimal-Fallback.

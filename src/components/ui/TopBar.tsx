@@ -1,0 +1,163 @@
+import { useEffect, useRef } from 'react';
+import {
+  AlertTriangle,
+  Compass,
+  List,
+  MapPin,
+  Moon,
+  Orbit,
+  Satellite,
+  Sunrise,
+} from 'lucide-react';
+import { compassLabel } from '../../math/coords';
+import { useDeviceOrientation } from '../../hooks/useDeviceOrientation';
+import { viewState } from '../../state/runtime';
+import { useAppStore } from '../../state/store';
+import { formatNumber } from '../../utils/format';
+import type { SkyPhase } from '../../types';
+
+const PHASE_LABEL: Record<SkyPhase, string> = {
+  day: 'Tag',
+  civil: 'Bürgerliche Dämmerung',
+  nautical: 'Nautische Dämmerung',
+  astronomical: 'Astronomische Dämmerung',
+  night: 'Astronomische Nacht',
+};
+
+function IconButton({
+  active,
+  label,
+  onClick,
+  children,
+}: {
+  active?: boolean;
+  label: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={active}
+      onClick={onClick}
+      className={`flex h-10 w-10 items-center justify-center rounded-lg border transition ${
+        active
+          ? 'border-sky-400/70 bg-sky-400/25 text-sky-100'
+          : 'border-sky-400/20 bg-slate-900/70 text-sky-300 hover:bg-sky-400/10'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** Kopfzeile: Standort, Dämmerungsphase, Blickrichtung und Moduswahl. */
+export function TopBar(): React.JSX.Element {
+  const observer = useAppStore((s) => s.observer);
+  const sun = useAppStore((s) => s.sun);
+  const status = useAppStore((s) => s.status);
+  const loading = useAppStore((s) => s.loading);
+  const catalog = useAppStore((s) => s.catalog);
+  const arEnabled = useAppStore((s) => s.arEnabled);
+  const arSupported = useAppStore((s) => s.arSupported);
+  const nightMode = useAppStore((s) => s.nightMode);
+  const toggleNightMode = useAppStore((s) => s.toggleNightMode);
+  const showTrails = useAppStore((s) => s.showTrails);
+  const toggleTrails = useAppStore((s) => s.toggleTrails);
+  const setDrawerOpen = useAppStore((s) => s.setDrawerOpen);
+  const errors = useAppStore((s) => s.errors);
+
+  const { enable, disable } = useDeviceOrientation();
+  const headingRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    let frame = 0;
+    const update = () => {
+      frame = requestAnimationFrame(update);
+      if (!headingRef.current) return;
+      headingRef.current.textContent = `${formatNumber(viewState.azimuthDeg, 0)}° ${compassLabel(
+        viewState.azimuthDeg,
+      )} · ${formatNumber(viewState.elevationDeg, 0)}°`;
+    };
+    frame = requestAnimationFrame(update);
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
+  return (
+    <div
+      className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col gap-2 p-3"
+      style={{ paddingTop: 'calc(var(--safe-top) + 0.75rem)' }}
+    >
+      <div className="flex items-start gap-2">
+        <div className="hud-panel hud-scan pointer-events-auto relative min-w-0 flex-1 overflow-hidden rounded-xl px-3 py-2">
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.18em] text-sky-200 uppercase">
+            <Satellite size={13} className={loading ? 'animate-hud-pulse' : ''} />
+            Orbital Atlas
+            <span className="ml-auto tabular-nums text-sky-300/70">{catalog.length} Obj.</span>
+          </div>
+
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-sky-300/70">
+            <span className="inline-flex items-center gap-1">
+              <MapPin size={10} />
+              {observer
+                ? `${formatNumber(observer.latitudeDeg, 3)}°, ${formatNumber(observer.longitudeDeg, 3)}°`
+                : 'Ortung läuft …'}
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <Sunrise size={10} />
+              {PHASE_LABEL[sun.phase]} ({formatNumber(sun.altitudeDeg, 1)}°)
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <Compass size={10} />
+              <span ref={headingRef} className="tabular-nums">
+                –
+              </span>
+            </span>
+          </div>
+
+          <div className="mt-0.5 truncate text-[10px] text-slate-500">{status}</div>
+        </div>
+
+        <div className="pointer-events-auto flex gap-1.5">
+          <IconButton
+            active={arEnabled}
+            label={arEnabled ? 'AR-Modus beenden' : 'AR-Modus (Kompass) starten'}
+            onClick={() => {
+              if (arEnabled) disable();
+              else void enable();
+            }}
+          >
+            <Compass size={18} />
+          </IconButton>
+          <IconButton active={showTrails} label="Bahnspur ein/aus" onClick={toggleTrails}>
+            <Orbit size={18} />
+          </IconButton>
+          <IconButton active={nightMode} label="Nachtmodus (Rotlicht)" onClick={toggleNightMode}>
+            <Moon size={18} />
+          </IconButton>
+          <IconButton label="Satellitenliste" onClick={() => setDrawerOpen(true)}>
+            <List size={18} />
+          </IconButton>
+        </div>
+      </div>
+
+      {!arSupported && (
+        <div className="pointer-events-none self-start rounded-md border border-amber-400/30 bg-amber-950/40 px-2 py-1 text-[10px] text-amber-200">
+          Kein Orientierungssensor erkannt – Touch-Navigation aktiv.
+        </div>
+      )}
+
+      {errors.slice(-2).map((message) => (
+        <div
+          key={message}
+          className="pointer-events-none flex max-w-[92vw] items-start gap-1.5 self-start rounded-md border border-rose-400/30 bg-rose-950/50 px-2 py-1 text-[10px] text-rose-200"
+        >
+          <AlertTriangle size={11} className="mt-px shrink-0" />
+          <span>{message}</span>
+        </div>
+      ))}
+    </div>
+  );
+}

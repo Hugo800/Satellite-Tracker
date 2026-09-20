@@ -1,0 +1,78 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-hud-bg: oklch(0.18 0.03 250 / 0.72);
+  --color-hud-line: oklch(0.72 0.14 220 / 0.45);
+  --color-hud-accent: oklch(0.78 0.15 220);
+  --color-hud-warn: oklch(0.82 0.17 75);
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+:root {
+  color-scheme: dark;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: #03060f;
+}
+
+body {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+  overscroll-behavior: none;
+  font-family: var(--font-mono);
+}
+
+/* Astronomischer Nachtmodus: entfernt Blau-/Grünanteile aus UI *und* WebGL-Canvas. */
+.night-vision {
+  filter: grayscale(1) sepia(1) hue-rotate(-38deg) saturate(7) brightness(0.72) contrast(1.15);
+}
+
+.hud-panel {
+  background: color-mix(in oklab, #04080f 78%, transparent);
+  border: 1px solid color-mix(in oklab, #38bdf8 32%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, #000 40%, transparent),
+    0 0 26px color-mix(in oklab, #0ea5e9 14%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+.hud-scan::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgb(255 255 255 / 0.035) 0px,
+    rgb(255 255 255 / 0.035) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+@keyframes hud-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.animate-hud-pulse {
+  animation: hud-pulse 1.8s ease-in-out infinite;
+}
