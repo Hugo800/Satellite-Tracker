@@ -167,6 +167,8 @@ export type WorkerRequest =
   | { type: 'stop' }
   | { type: 'time'; base: TimeBase }
   | { type: 'recycle'; buffer: ArrayBuffer }
+  /** Ausgewähltes Objekt – nur dafür werden Subpunkt und Bahnhöhe gerechnet. */
+  | { type: 'select'; index: number | null }
   /** Rohtext einer Gruppe, vom Lader-Shard über den Main-Thread verteilt. */
   | { type: 'tle'; group: SatelliteGroup; text: string }
   | { type: 'trail'; index: number; fromMin: number; toMin: number; samples: number }

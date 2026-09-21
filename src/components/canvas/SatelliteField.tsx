@@ -6,6 +6,7 @@ import {
   InstancedBufferAttribute,
   InstancedBufferGeometry,
   Mesh,
+  PerspectiveCamera,
   PlaneGeometry,
   ShaderMaterial,
 } from 'three';
@@ -34,6 +35,10 @@ const ECLIPSE_FACTOR = 0.3;
 /** Instanz-Kapazität wächst in diesen Blöcken, damit Neuaufbauten selten bleiben. */
 const CAPACITY_CHUNK = 2048;
 
+/** Bildwinkel, bei dem die Symbolgröße ihrem Nennwert entspricht. */
+const REFERENCE_FOV_DEG = 70;
+const REFERENCE_HALF_TAN = Math.tan((REFERENCE_FOV_DEG * Math.PI) / 360);
+
 const vertexShader = /* glsl */ `
   attribute vec2 aPrev;
   attribute vec2 aCur;
@@ -42,6 +47,7 @@ const vertexShader = /* glsl */ `
 
   uniform float uT;
   uniform float uRadius;
+  uniform float uSizeScale;
 
   varying vec2 vUv;
   varying vec3 vColor;
@@ -73,8 +79,14 @@ const vertexShader = /* glsl */ `
 
     // Bildschirmparalleles Billboard: Der Versatz wirkt im View-Space, also
     // ohne die Kamera-Quaternion je Instanz auf der CPU anfassen zu müssen.
+    //
+    // uSizeScale haelt die Groesse in *Pixeln* konstant, statt in Weltmassen:
+    // Ohne diesen Faktor wüchse jeder Punkt beim Hineinzoomen mit, und aus
+    // einem dichten Feld würde eine geschlossene Leuchtfläche – bei 22° statt
+    // 70° Bildwinkel rund das Zehnfache an überlagerten Fragmenten. So
+    // trennen sich enge Gruppen beim Zoomen stattdessen auf.
     vec4 mv = modelViewMatrix * vec4(centre, 1.0);
-    mv.xy += position.xy * aSize;
+    mv.xy += position.xy * aSize * uSizeScale;
     gl_Position = projectionMatrix * mv;
 
     vUv = uv;
@@ -184,6 +196,7 @@ export function SatelliteField(): React.JSX.Element {
         uniforms: {
           uT: { value: 0 },
           uRadius: { value: SKY_RADIUS },
+          uSizeScale: { value: 1 },
           uMap: { value: dotTexture },
           uOpacity: { value: 1 },
         },
@@ -320,6 +333,11 @@ export function SatelliteField(): React.JSX.Element {
     const t = Math.min(1, state.elapsed / Math.max(16, telemetry.intervalMs));
     material.uniforms.uT.value = t;
 
+    // Beim Zoomen bleibt die Bildschirmgröße der Symbole gleich (siehe Shader).
+    const fovDeg = (camera as PerspectiveCamera).fov ?? REFERENCE_FOV_DEG;
+    const sizeScale = Math.tan((fovDeg * Math.PI) / 360) / REFERENCE_HALF_TAN;
+    material.uniforms.uSizeScale.value = sizeScale;
+
     /* --- Auswahlring: ein einzelnes Objekt, deshalb weiterhin auf der CPU --- */
     const ring = selectionRef.current;
     const selected = selectedRef.current;
@@ -339,7 +357,7 @@ export function SatelliteField(): React.JSX.Element {
 
     azElToVector(az, el, SKY_RADIUS, ring.position);
     ring.quaternion.copy(camera.quaternion);
-    ring.scale.setScalar(Math.max(26, buffers.size.array[selected] * 2.6));
+    ring.scale.setScalar(Math.max(26, buffers.size.array[selected] * 2.6) * sizeScale);
     ring.visible = true;
   });
 

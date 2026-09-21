@@ -92,7 +92,8 @@ function benchFast(): number {
   for (let t = 0; t < TICKS; t += 1) {
     const tick = buildTickFrame(new Date(baseMs + t * 100), observer);
     for (let i = 0; i < catalog.length; i += 1) {
-      propagateInto(catalog[i], frame, tick, 2.6, buffer, i * TELEMETRY_STRIDE, OFFSETS);
+      // Wie im Worker: Subpunkt nur für das ausgewählte Objekt.
+      propagateInto(catalog[i], frame, tick, 2.6, buffer, i * TELEMETRY_STRIDE, i === 0, OFFSETS);
     }
   }
   return (performance.now() - started) / TICKS;

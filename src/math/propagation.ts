@@ -458,6 +458,15 @@ export function propagateInto(
   standardMagnitude: number,
   out: Float32Array,
   base: number,
+  /**
+   * Subpunkt und Bahnhöhe mitrechnen?
+   *
+   * Beides stammt aus derselben iterativen Umkehrung des Ellipsoids und kostet
+   * rund ein Drittel des gesamten Ticks (`npm run bench:propagation`). Angezeigt
+   * wird es aber nur in der Telemetriekarte, also für genau ein Objekt. Für
+   * alle anderen bleiben die drei Felder `NaN`.
+   */
+  withSubPoint: boolean,
   offsets: {
     az: number;
     el: number;
@@ -503,21 +512,29 @@ export function propagateInto(
   azimuth = ((azimuth % TAU) + TAU) % TAU;
 
   /* --- Subpunkt (iterativ, bricht ab sobald konvergiert) --- */
-  const R = Math.hypot(p.x, p.y);
-  let longitude = Math.atan2(p.y, p.x) - tick.gmst;
-  longitude = ((((longitude + Math.PI) % TAU) + TAU) % TAU) - Math.PI;
+  let latitudeDeg = Number.NaN;
+  let longitudeDeg = Number.NaN;
+  let heightKm = Number.NaN;
 
-  let latitude = Math.atan2(p.z, R);
-  let C = 1;
-  for (let i = 0; i < 20; i += 1) {
-    const sinLat = Math.sin(latitude);
-    C = 1 / Math.sqrt(1 - WGS84_E2 * sinLat * sinLat);
-    const next = Math.atan2(p.z + WGS84_A * C * WGS84_E2 * sinLat, R);
-    const converged = Math.abs(next - latitude) < 1e-13;
-    latitude = next;
-    if (converged) break;
+  if (withSubPoint) {
+    const R = Math.hypot(p.x, p.y);
+    let longitude = Math.atan2(p.y, p.x) - tick.gmst;
+    longitude = ((((longitude + Math.PI) % TAU) + TAU) % TAU) - Math.PI;
+
+    let latitude = Math.atan2(p.z, R);
+    let C = 1;
+    for (let i = 0; i < 20; i += 1) {
+      const sinLat = Math.sin(latitude);
+      C = 1 / Math.sqrt(1 - WGS84_E2 * sinLat * sinLat);
+      const next = Math.atan2(p.z + WGS84_A * C * WGS84_E2 * sinLat, R);
+      const converged = Math.abs(next - latitude) < 1e-13;
+      latitude = next;
+      if (converged) break;
+    }
+    heightKm = R / Math.cos(latitude) - WGS84_A * C;
+    latitudeDeg = latitude * RAD;
+    longitudeDeg = longitude * RAD;
   }
-  const heightKm = R / Math.cos(latitude) - WGS84_A * C;
 
   /* --- Beleuchtung --- */
   const sun = tick.sunUnit;
@@ -548,8 +565,8 @@ export function propagateInto(
   out[base + offsets.speed] =
     v && typeof v === 'object' ? Math.hypot(v.x, v.y, v.z) : 0;
   out[base + offsets.eclipsed] = eclipsed ? 1 : 0;
-  out[base + offsets.lat] = latitude * RAD;
-  out[base + offsets.lon] = longitude * RAD;
+  out[base + offsets.lat] = latitudeDeg;
+  out[base + offsets.lon] = longitudeDeg;
   out[base + offsets.mag] = magnitude;
   return true;
 }

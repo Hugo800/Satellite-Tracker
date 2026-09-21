@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Crosshair, Eye, EyeOff, Radio, Timer, X } from 'lucide-react';
 import { RAD, compassLabel } from '../../math/coords';
-import { readSample, requestFocus } from '../../state/runtime';
+import { catalogIndex, readSample, requestFocus } from '../../state/runtime';
 import { useAppStore } from '../../state/store';
 import {
   formatClockShort,
@@ -100,7 +100,8 @@ function PassRow({ pass }: { pass: PassPrediction }): React.JSX.Element {
  */
 export function TelemetryPanel(): React.JSX.Element | null {
   const selectedIndex = useAppStore((s) => s.selectedIndex);
-  const catalogByIndex = useAppStore((s) => s.catalogByIndex);
+  // Weckt die Karte, sobald die Metadaten des gewählten Objekts eintreffen.
+  const catalogVersion = useAppStore((s) => s.catalogVersion);
   const passes = useAppStore((s) => s.passes);
   const passPending = useAppStore((s) => s.passPending);
   const select = useAppStore((s) => s.select);
@@ -167,7 +168,8 @@ export function TelemetryPanel(): React.JSX.Element | null {
   }, [nextPass]);
 
   if (selectedIndex === null) return null;
-  const meta = catalogByIndex.get(selectedIndex);
+  void catalogVersion;
+  const meta = catalogIndex.meta[selectedIndex];
 
   // Die Karte wächst vom unteren Rand nach oben. Ohne Grenze schöbe eine
   // lange Überflugliste sie über Kopfzeile und Modus-Leiste; darüber hinaus

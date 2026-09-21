@@ -201,7 +201,14 @@ body,
 
 body {
   -webkit-tap-highlight-color: transparent;
-  touch-action: none;
+  /*
+   * `manipulation` statt `none`: Die Himmelsgesten (Schwenken, Pinch auf die
+   * Brennweite) hängen am Canvas und werden dort unten abgeschaltet. Auf der
+   * Bedienoberfläche bleibt der Seitenzoom damit erhalten – ihn global zu
+   * sperren wäre ein Verstoß gegen WCAG 1.4.4, und die App nutzt feste
+   * Pixelgrößen, hat also keine eigene Schriftvergrößerung.
+   */
+  touch-action: manipulation;
   overscroll-behavior: none;
   font-family: var(--font-sans);
   /* Ziffern in Tabellen und Telemetrie laufen sonst bei jedem Wechsel um. */
@@ -209,6 +216,24 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   color: var(--label);
+}
+
+/*
+ * Der Himmel wertet Zieh- und Pinch-Gesten selbst aus (Schwenken bzw.
+ * Brennweite), hier darf der Browser nicht dazwischenfunken.
+ *
+ * `!important` ist hier kein Holzhammer, sondern nötig: OrbitControls setzt
+ * `touch-action` beim Trennen als *Inline*-Stil auf `auto` zurück und würde
+ * eine gewöhnliche Regel überstimmen. Eine wichtige Autorenregel gewinnt
+ * dagegen auch gegen Inline-Stile.
+ *
+ * Bewusst nur der Himmel: Über der Bedienoberfläche und dem Radar bleibt der
+ * Seitenzoom erhalten. Das Nachfahrenzeichen ist nötig, weil react-three-fiber
+ * die Klasse auf einen umschließenden Container legt, nicht auf das
+ * Canvas-Element selbst – und `touch-action` sich nicht vererbt.
+ */
+.sky-canvas canvas {
+  touch-action: none !important;
 }
 
 /* -------------------------------------------------------------------- */

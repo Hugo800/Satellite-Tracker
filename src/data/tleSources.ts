@@ -92,3 +92,29 @@ NOAA 19
 1 33591U 09005A   25060.45000000  .00000155  00000+0  10312-3 0  9990
 2 33591  99.0500  50.2000 0013500 220.0000 140.0000 14.12800000    15
 `;
+
+/**
+ * Dekodiert eine Alpha-5-Katalognummer.
+ *
+ * Das TLE-Format hat für die Katalognummer nur fünf Zeichen. Seit die
+ * Nummern 99999 überschritten haben, kodiert CelesTrak die Hunderttausender
+ * als Buchstaben: `A0001` ist 100001. Die Buchstaben `I` und `O` bleiben
+ * ausgespart, weil sie mit Eins und Null verwechselbar wären.
+ *
+ * Ohne diese Umrechnung trügen die neuesten Starts eine Kennung, die sich
+ * weder suchen noch mit einem Katalog abgleichen ließe.
+ */
+const ALPHA5_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+
+export function decodeAlpha5(field: string): string {
+  const raw = field.trim();
+  if (!raw) return raw;
+  const head = raw[0].toUpperCase();
+  if (head >= '0' && head <= '9') return String(Number(raw));
+
+  const offset = ALPHA5_LETTERS.indexOf(head);
+  if (offset < 0) return raw;
+  const rest = Number(raw.slice(1));
+  if (!Number.isFinite(rest)) return raw;
+  return String((offset + 10) * 10000 + rest);
+}

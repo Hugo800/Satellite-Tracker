@@ -9,6 +9,7 @@
  * Aufruf: npm run verify:fastpath
  */
 import { twoline2satrec } from 'satellite.js';
+import { decodeAlpha5 } from '../src/data/tleSources';
 import { geoToObserverGd } from '../src/math/coords';
 import {
   buildObserverFrame,
@@ -127,7 +128,7 @@ for (const geo of OBSERVERS) {
       });
 
       buffer.fill(Number.NaN);
-      const ok = propagateInto(satrec, frame, tick, standardMagnitude, buffer, 0, OFFSETS);
+      const ok = propagateInto(satrec, frame, tick, standardMagnitude, buffer, 0, true, OFFSETS);
 
       if (!slow || !ok) {
         if (Boolean(slow) !== ok) {
@@ -155,6 +156,54 @@ for (const geo of OBSERVERS) {
         console.error(`  ✗ ${label} eclipsed: langsam=${slow.eclipsed} schnell=${buffer[T_ECLIPSED]}`);
       }
     }
+  }
+}
+
+/* --- Gegenprobe: `withSubPoint = false` lässt nur Subpunkt/Bahnhöhe weg --- */
+{
+  const observer = geoToObserverGd(OBSERVERS[0]);
+  const frame = buildObserverFrame(observer);
+  const satrec = twoline2satrec(TLES[0][1], TLES[0][2]);
+  const tick = buildTickFrame(new Date(baseMs), observer);
+  const full = new Float32Array(TELEMETRY_STRIDE);
+  const lean = new Float32Array(TELEMETRY_STRIDE);
+  propagateInto(satrec, frame, tick, 2.6, full, 0, true, OFFSETS);
+  propagateInto(satrec, frame, tick, 2.6, lean, 0, false, OFFSETS);
+
+  const dropped = new Set([T_ALT, T_LAT, T_LON]);
+  for (let i = 0; i < TELEMETRY_STRIDE; i += 1) {
+    checks += 1;
+    if (dropped.has(i)) {
+      if (!Number.isNaN(lean[i])) {
+        failures += 1;
+        console.error(`  ✗ ohne Subpunkt: Feld ${i} sollte NaN sein, ist ${lean[i]}`);
+      }
+    } else if (full[i] !== lean[i] && !(Number.isNaN(full[i]) && Number.isNaN(lean[i]))) {
+      failures += 1;
+      console.error(`  ✗ ohne Subpunkt: Feld ${i} weicht ab (${full[i]} vs ${lean[i]})`);
+    }
+  }
+}
+
+/* --- Alpha-5-Katalognummern --- */
+const ALPHA5_CASES: Array<[string, string]> = [
+  ['25544', '25544'],
+  ['00005', '5'],
+  ['  900', '900'],
+  ['A0001', '100001'], // erste Nummer jenseits von 99999
+  ['B0000', '110000'],
+  ['H0001', '170001'],
+  ['J0001', '180001'], // I wird übersprungen
+  ['P0000', '230000'], // O wird übersprungen
+  ['Z9999', '339999'], // letzte darstellbare Nummer
+];
+
+for (const [input, expected] of ALPHA5_CASES) {
+  checks += 1;
+  const got = decodeAlpha5(input);
+  if (got !== expected) {
+    failures += 1;
+    console.error(`  ✗ decodeAlpha5('${input}'): erwartet ${expected}, erhalten ${got}`);
   }
 }
 

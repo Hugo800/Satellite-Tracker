@@ -1,4 +1,5 @@
 import { Quaternion, Vector3 } from 'three';
+import type { SatelliteMeta } from '../types';
 import {
   TELEMETRY_STRIDE,
   T_ALT,
@@ -118,11 +119,20 @@ export const catalogIndex: {
   starlink: Uint8Array;
   /** 1 = prominentes Objekt. */
   highlight: Uint8Array;
+  /**
+   * Metadaten, dünn besetzt nach globalem Index.
+   *
+   * Ersetzt eine `Map`, die bei jedem Katalog-Update über alle Einträge neu
+   * aufgebaut wurde – für eine einzige Abfrage, nämlich die des ausgewählten
+   * Objekts in der Telemetriekarte.
+   */
+  meta: Array<SatelliteMeta | undefined>;
   version: number;
 } = {
   groupIds: new Uint8Array(0),
   starlink: new Uint8Array(0),
   highlight: new Uint8Array(0),
+  meta: [],
   version: 0,
 };
 

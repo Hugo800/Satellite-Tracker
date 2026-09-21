@@ -54,8 +54,6 @@ let timeBase: TimeBase = {
   scale: 1,
 };
 
-/** Sparse nach globalem Index – über alle Shards hinweg zusammengeführt. */
-let metaByIndex: SatelliteMeta[] = [];
 let catalogTotal = 0;
 let catalogDirty = false;
 let catalogTimer: ReturnType<typeof setTimeout> | null = null;
@@ -93,6 +91,14 @@ export const engine = {
   },
   reload(groups: SatelliteGroup[]): void {
     sendTo(0, { type: 'load', groups });
+  },
+  /**
+   * Meldet die Auswahl an den Pool. Subpunkt und Bahnhöhe entstehen aus einer
+   * iterativen Umkehrung des Erdellipsoids und kosten rund ein Drittel des
+   * Ticks; angezeigt werden sie nur für dieses eine Objekt.
+   */
+  setSelected(index: number | null): void {
+    broadcast({ type: 'select', index });
   },
   get shardCount(): number {
     return pool?.shardCount ?? 0;
@@ -200,8 +206,8 @@ function flushCatalog(setCatalog: (catalog: SatelliteMeta[]) => void): void {
   catalogDirty = false;
 
   const catalog: SatelliteMeta[] = [];
-  for (let i = 0; i < metaByIndex.length; i += 1) {
-    const meta = metaByIndex[i];
+  for (let i = 0; i < catalogIndex.meta.length; i += 1) {
+    const meta = catalogIndex.meta[i];
     if (meta) catalog.push(meta);
   }
 
@@ -226,6 +232,7 @@ export function useSatelliteEngine({ intervalMs = 100 }: EngineOptions = {}): vo
   const setStatus = useAppStore((s) => s.setStatus);
   const pushError = useAppStore((s) => s.pushError);
   const setPasses = useAppStore((s) => s.setPasses);
+  const selectedIndex = useAppStore((s) => s.selectedIndex);
   const started = useRef(false);
 
   useEffect(() => {
@@ -243,7 +250,7 @@ export function useSatelliteEngine({ intervalMs = 100 }: EngineOptions = {}): vo
     telemetry.intervalMs = intervalMs;
     pool = state;
 
-    metaByIndex = [];
+    catalogIndex.meta = [];
     catalogTotal = 0;
     catalogDirty = false;
 
@@ -273,7 +280,7 @@ export function useSatelliteEngine({ intervalMs = 100 }: EngineOptions = {}): vo
         }
 
         case 'catalog': {
-          for (const meta of msg.catalog) metaByIndex[meta.index] = meta;
+          for (const meta of msg.catalog) catalogIndex.meta[meta.index] = meta;
           if (msg.total > catalogTotal) {
             catalogTotal = msg.total;
             ensureTelemetryCapacity(catalogTotal);
@@ -361,4 +368,8 @@ export function useSatelliteEngine({ intervalMs = 100 }: EngineOptions = {}): vo
   useEffect(() => {
     sendTo(0, { type: 'load', groups: activeGroups });
   }, [activeGroups]);
+
+  useEffect(() => {
+    engine.setSelected(selectedIndex);
+  }, [selectedIndex]);
 }

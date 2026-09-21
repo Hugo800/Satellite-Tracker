@@ -16,7 +16,8 @@ export interface AppState {
   observer: GeoCoord | null;
   geoError: string | null;
   catalog: SatelliteMeta[];
-  catalogByIndex: Map<number, SatelliteMeta>;
+  /** Steigt bei jedem Katalog-Update; Abnehmer von `catalogIndex.meta` hängen daran. */
+  catalogVersion: number;
   activeGroups: SatelliteGroup[];
   status: string;
   loading: boolean;
@@ -83,7 +84,7 @@ export const useAppStore = create<AppState>((set) => ({
   observer: null,
   geoError: null,
   catalog: [],
-  catalogByIndex: new Map(),
+  catalogVersion: 0,
   // `other` ist der Gesamtkatalog – er ist von Anfang an aktiv, damit der
   // Modus „Alle“ wirklich alles zeigt und nicht nur vier Teilgruppen.
   activeGroups: ['stations', 'brightest', 'weather', 'starlink', 'other'],
@@ -109,8 +110,11 @@ export const useAppStore = create<AppState>((set) => ({
 
   setObserver: (observer) => set({ observer, geoError: null }),
   setGeoError: (geoError) => set({ geoError }),
+  // Bewusst ohne Index-Map: Die lag früher hier und wurde bei jedem Update
+  // über alle Einträge neu gebaut – für genau eine Abfrage. Der Zugriff nach
+  // Index läuft jetzt über `catalogIndex.meta` im Laufzeitzustand.
   setCatalog: (catalog) =>
-    set({ catalog, catalogByIndex: new Map(catalog.map((s) => [s.index, s])) }),
+    set((state) => ({ catalog, catalogVersion: state.catalogVersion + 1 })),
   setStatus: (status, loading) => set({ status, loading }),
   pushError: (message) =>
     set((state) =>

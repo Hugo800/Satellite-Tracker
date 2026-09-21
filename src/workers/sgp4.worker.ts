@@ -17,7 +17,13 @@
  */
 import { twoline2satrec } from 'satellite.js';
 import type { SatRec } from 'satellite.js';
-import { FALLBACK_TLE, GROUP_LOAD_ORDER, HIGHLIGHT_NORAD_IDS, TLE_SOURCES } from '../data/tleSources';
+import {
+  FALLBACK_TLE,
+  GROUP_LOAD_ORDER,
+  HIGHLIGHT_NORAD_IDS,
+  TLE_SOURCES,
+  decodeAlpha5,
+} from '../data/tleSources';
 import { geoToObserverGd, normalizeAngle } from '../math/coords';
 import {
   buildObserverFrame,
@@ -93,6 +99,8 @@ let nextIndex = 0;
 
 let observer: ObserverGd | null = null;
 let observerFrame: ObserverFrame | null = null;
+/** Globaler Index des ausgewählten Objekts, oder -1. */
+let selectedIndex = -1;
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -166,7 +174,7 @@ function parseTle(text: string, group: SatelliteGroup): SatelliteMeta[] {
     const l2 = lines[i + 2];
     if (!l1 || !l2 || !l1.startsWith('1 ') || !l2.startsWith('2 ')) continue;
 
-    const noradId = l1.slice(2, 7).trim();
+    const noradId = decodeAlpha5(l1.slice(2, 7));
     if (!noradId) continue;
     // Der Dreierblock ist verbraucht – die beiden Elementzeilen nicht erneut prüfen.
     i += 2;
@@ -300,7 +308,7 @@ async function loadGroups(groups: SatelliteGroup[]): Promise<void> {
     // Sofort etwas Sichtbares: Kernobjekte aus dem eingebauten Katalog. Sie
     // werden an Ort und Stelle durch echte Daten ersetzt, sobald sie eintreffen.
     for (const line of FALLBACK_TLE.split(/\r?\n/)) {
-      if (line.startsWith('1 ')) provisionalIds.add(line.slice(2, 7).trim());
+      if (line.startsWith('1 ')) provisionalIds.add(decodeAlpha5(line.slice(2, 7)));
     }
     post({ type: 'tle', group: 'stations', text: FALLBACK_TLE });
     ingest(FALLBACK_TLE, 'stations');
@@ -400,12 +408,25 @@ function tick(): number {
   const count = own.length;
   const buffer = takeBuffer(count * TELEMETRY_STRIDE * 4);
 
+  // Nur der eigene Slot des ausgewählten Objekts braucht den Subpunkt.
+  const selectedSlot =
+    selectedIndex >= 0 && isMine(selectedIndex) ? ownSlotFor(selectedIndex) : -1;
+
   for (let k = 0; k < count; k += 1) {
     const base = k * TELEMETRY_STRIDE;
     const entry = own[k];
     if (
       !entry ||
-      !propagateInto(entry.satrec, frame, tickFrame, entry.meta.standardMagnitude, buffer, base, OFFSETS)
+      !propagateInto(
+        entry.satrec,
+        frame,
+        tickFrame,
+        entry.meta.standardMagnitude,
+        buffer,
+        base,
+        k === selectedSlot,
+        OFFSETS,
+      )
     ) {
       // Der Buffer ist recycelt – ohne Löschen stünden hier die Werte des
       // vorigen Takts. `range = NaN` genügt zwar allen Verbrauchern als
@@ -503,7 +524,7 @@ ctx.onmessage = (event: MessageEvent<WorkerRequest>) => {
       if (!isLoader) {
         if (msg.group === 'stations' && nextIndex === 0) {
           for (const line of msg.text.split(/\r?\n/)) {
-            if (line.startsWith('1 ')) provisionalIds.add(line.slice(2, 7).trim());
+            if (line.startsWith('1 ')) provisionalIds.add(decodeAlpha5(line.slice(2, 7)));
           }
         }
         ingest(msg.text, msg.group);
@@ -530,6 +551,10 @@ ctx.onmessage = (event: MessageEvent<WorkerRequest>) => {
 
     case 'time':
       timeBase = msg.base;
+      break;
+
+    case 'select':
+      selectedIndex = msg.index ?? -1;
       break;
 
     case 'recycle':

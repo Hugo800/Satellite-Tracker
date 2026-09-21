@@ -18,7 +18,7 @@ import { TapPicker } from './TapPicker';
 export function SkyScene(): React.JSX.Element {
   return (
     <Canvas
-      className="absolute inset-0"
+      className="sky-canvas absolute inset-0"
       dpr={[1, 2]}
       gl={{
         antialias: true,
