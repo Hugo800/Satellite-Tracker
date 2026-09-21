@@ -10,7 +10,7 @@ import { GROUP_COLORS, GROUP_ORDER, MAX_INSTANCES, SKY_RADIUS } from './Satellit
 
 /** Anzahl gespeicherter Stützstellen je Satellit. */
 const HISTORY_LEN = 20;
-/** Abstand der Stützstellen – 20 × 900 ms = 18 s zurückliegende Bahn (≈ 6° bei LEO). */
+/** Abstand der Stützstellen – maximal 20 × 900 ms = 18 s zurückliegende Bahn. */
 const SAMPLE_INTERVAL_MS = 900;
 /**
  * Obergrenze gleichzeitig gezeichneter Spuren. Im Modus „Alle“ können mehrere
@@ -24,6 +24,13 @@ const TRAIL_RADIUS = SKY_RADIUS * 0.995;
 const HEAD_ALPHA = 0.75;
 /** Segmente mit größerem Azimutsprung stammen aus einer Lücke – nicht verbinden. */
 const MAX_SEGMENT_STEP = 0.5;
+/**
+ * Maximale Winkellänge einer Spur – unabhängig von Zeitfenster oder
+ * Winkelgeschwindigkeit des Satelliten, damit die Spur immer nur ein kurzes
+ * Stück (≈ 3 cm bei typischem Zoom/Betrachtungsabstand) hinter dem Objekt
+ * herzieht statt sich über Minuten hinweg über den Bildschirm zu ziehen.
+ */
+const MAX_TRAIL_ARC = 4 * DEG;
 
 const STARLINK_GROUP_ID = GROUP_ORDER.indexOf('starlink');
 
@@ -82,6 +89,10 @@ export function SatelliteTrails(): React.JSX.Element | null {
       positions: new Float32Array(MAX_VERTICES * 3),
       colors: new Float32Array(MAX_VERTICES * 3),
       alphas: new Float32Array(MAX_VERTICES),
+      // Wiederverwendete Kratzer für die Stützstellen eines einzelnen Satelliten,
+      // um pro Frame keine neuen Arrays zu allozieren.
+      tmpAz: new Float32Array(HISTORY_LEN + 1),
+      tmpEl: new Float32Array(HISTORY_LEN + 1),
     }),
     [],
   );
@@ -157,30 +168,59 @@ export function SatelliteTrails(): React.JSX.Element | null {
       if (!shown) continue;
 
       const color = palette[groupId];
+      const filled = state.filled;
 
-      // Von der ältesten Stützstelle bis zur aktuellen Position.
+      // Stützstellen einmal in einen Kratzer laden (Ringpuffer + aktuelle Position).
+      for (let k = 0; k <= filled; k += 1) {
+        if (k === filled) {
+          buffers.tmpAz[k] = data[base + T_AZ];
+          buffers.tmpEl[k] = data[base + T_EL];
+        } else {
+          const slot =
+            i * HISTORY_LEN + ((state.writeIndex - filled + k + HISTORY_LEN * 2) % HISTORY_LEN);
+          buffers.tmpAz[k] = buffers.histAz[slot];
+          buffers.tmpEl[k] = buffers.histEl[slot];
+        }
+      }
+
+      // Von hinten (Kopf) nach vorn (Schwanz) die zurückgelegte Winkellänge
+      // aufsummieren und dort abschneiden, wo `MAX_TRAIL_ARC` erreicht ist –
+      // so bleibt die Spur immer gleich kurz, egal wie schnell/lang die
+      // Historie ist.
+      let startK = 0;
+      let arc = 0;
+      for (let j = filled; j >= 1; j -= 1) {
+        const az1 = buffers.tmpAz[j];
+        const el1 = buffers.tmpEl[j];
+        const az0 = buffers.tmpAz[j - 1];
+        const el0 = buffers.tmpEl[j - 1];
+        const gap = el1 <= 0 || el0 <= 0 || Math.abs(angleDelta(az1, az0)) >= MAX_SEGMENT_STEP;
+        if (gap) {
+          startK = j;
+          break;
+        }
+        arc += Math.hypot(angleDelta(az1, az0), el1 - el0);
+        if (arc > MAX_TRAIL_ARC) {
+          startK = j;
+          break;
+        }
+        startK = j - 1;
+      }
+
+      const span = Math.max(1, filled - startK);
+
+      // Von der abgeschnittenen ältesten Stützstelle bis zur aktuellen Position.
       let prevAz = 0;
       let prevEl = 0;
       let hasPrev = false;
 
-      for (let k = 0; k <= state.filled; k += 1) {
-        let az: number;
-        let el: number;
-
-        if (k === state.filled) {
-          az = data[base + T_AZ];
-          el = data[base + T_EL];
-        } else {
-          const slot =
-            i * HISTORY_LEN +
-            ((state.writeIndex - state.filled + k + HISTORY_LEN * 2) % HISTORY_LEN);
-          az = buffers.histAz[slot];
-          el = buffers.histEl[slot];
-        }
+      for (let k = startK; k <= filled; k += 1) {
+        const az = buffers.tmpAz[k];
+        const el = buffers.tmpEl[k];
 
         if (hasPrev && el > 0 && prevEl > 0 && Math.abs(angleDelta(az, prevAz)) < MAX_SEGMENT_STEP) {
-          const alphaTail = (HEAD_ALPHA * (k - 1)) / state.filled;
-          const alphaHead = (HEAD_ALPHA * k) / state.filled;
+          const alphaTail = (HEAD_ALPHA * (k - 1 - startK)) / span;
+          const alphaHead = (HEAD_ALPHA * (k - startK)) / span;
           vertex = writeSegment(
             buffers,
             vertex,
