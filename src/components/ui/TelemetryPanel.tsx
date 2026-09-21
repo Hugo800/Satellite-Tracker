@@ -30,7 +30,7 @@ function LiveField({
         {label}
       </div>
       <div className="mt-0.5 flex items-baseline gap-1">
-        <span ref={valueRef} className="text-[17px] font-semibold tracking-[-0.02em] text-label">
+        <span ref={valueRef} className="text-[15.5px] font-semibold tracking-[-0.02em] text-label">
           –
         </span>
         {unit && <span className="text-[11px] text-label-2">{unit}</span>}
@@ -129,15 +129,18 @@ export function TelemetryPanel(): React.JSX.Element | null {
 
       if (elevationRef.current) elevationRef.current.textContent = formatNumber(elevationDeg, 2);
       if (azimuthRef.current) {
-        azimuthRef.current.textContent = `${formatNumber(azimuthDeg, 1)}° ${compassLabel(azimuthDeg)}`;
+        // Nur ganze Grad: Mit Nachkommastelle bricht der Wert samt
+        // Himmelsrichtung in der schmalen Kachel um.
+        azimuthRef.current.textContent = `${formatNumber(azimuthDeg, 0)}° ${compassLabel(azimuthDeg)}`;
       }
       if (altitudeRef.current) altitudeRef.current.textContent = formatNumber(sample.altitudeKm, 1);
       if (rangeRef.current) rangeRef.current.textContent = formatNumber(sample.rangeKm, 1);
       if (speedRef.current) speedRef.current.textContent = formatNumber(sample.speedKmS, 3);
       if (subPointRef.current) {
-        subPointRef.current.textContent = `${formatNumber(sample.latitudeDeg, 2)}° / ${formatNumber(
+        // Eine Nachkommastelle entspricht rund 11 km – für die Kachel genug.
+        subPointRef.current.textContent = `${formatNumber(sample.latitudeDeg, 1)}° / ${formatNumber(
           sample.longitudeDeg,
-          2,
+          1,
         )}°`;
       }
       if (lightRef.current) {
@@ -166,9 +169,15 @@ export function TelemetryPanel(): React.JSX.Element | null {
   if (selectedIndex === null) return null;
   const meta = catalogByIndex.get(selectedIndex);
 
+  // Die Karte wächst vom unteren Rand nach oben. Ohne Grenze schöbe eine
+  // lange Überflugliste sie über Kopfzeile und Modus-Leiste; darüber hinaus
+  // scrollt sie deshalb in sich selbst.
   return (
-    <div className="material pointer-events-auto w-[min(92vw,22.5rem)] overflow-hidden rounded-[var(--radius-md)]">
-      <div className="hairline-b flex items-center gap-1 px-3 py-2">
+    <div
+      className="material pointer-events-auto flex w-[min(92vw,22.5rem)] flex-col overflow-hidden rounded-[var(--radius-md)]"
+      style={{ maxHeight: 'min(52dvh, 30rem)' }}
+    >
+      <div className="hairline-b flex shrink-0 items-center gap-1 px-3 py-2">
         <Radio size={15} strokeWidth={2.2} className="animate-soft-pulse text-accent" aria-hidden />
         <div className="ml-1 min-w-0 flex-1">
           <div className="truncate text-[15px] font-semibold tracking-[-0.01em] text-label">
@@ -214,7 +223,7 @@ export function TelemetryPanel(): React.JSX.Element | null {
       </div>
 
       {expanded && (
-        <div className="space-y-2 px-3 py-2.5">
+        <div className="no-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain px-3 py-2.5">
           <div className="grid grid-cols-3 gap-1.5">
             <LiveField
               label="Elevation"

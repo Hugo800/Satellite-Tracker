@@ -48,15 +48,21 @@ const PALETTES: Record<'light' | 'dark', Palette> = {
     selection: '#ff375f',
   },
   light: {
-    disc: 'rgba(255, 255, 255, 0.5)',
-    ring: 'rgba(60, 60, 67, 0.2)',
-    ringStrong: 'rgba(60, 60, 67, 0.38)',
-    cross: 'rgba(60, 60, 67, 0.12)',
-    cone: 'rgba(0, 122, 255, 0.16)',
-    coneLine: 'rgba(0, 122, 255, 0.55)',
-    label: 'rgba(60, 60, 67, 0.7)',
-    zenith: 'rgba(60, 60, 67, 0.55)',
-    selection: '#ff2d55',
+    // Die Scheibe bleibt auch hier dunkel: Sie bildet den Nachthimmel ab, und
+    // helle Gruppenfarben (etwa die der hellsten Objekte, #f5f5f7) wären auf
+    // einer hellen Fläche schlicht nicht mehr zu sehen. Gerahmt wird sie vom
+    // hellen Material, sodass sie als eingelassene Himmelsansicht wirkt.
+    disc: 'rgba(18, 20, 26, 0.9)',
+    ring: 'rgba(235, 235, 245, 0.2)',
+    ringStrong: 'rgba(235, 235, 245, 0.4)',
+    cross: 'rgba(235, 235, 245, 0.12)',
+    cone: 'rgba(0, 122, 255, 0.26)',
+    coneLine: 'rgba(90, 170, 255, 0.7)',
+    // N/S/O/W stehen im Rand *außerhalb* der Scheibe, also auf dem hellen
+    // Material – sie folgen deshalb dem Erscheinungsbild, nicht der Scheibe.
+    label: 'rgba(60, 60, 67, 0.75)',
+    zenith: 'rgba(235, 235, 245, 0.55)',
+    selection: '#ff375f',
   },
 };
 

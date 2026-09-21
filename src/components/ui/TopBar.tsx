@@ -203,7 +203,7 @@ export function TopBar(): React.JSX.Element {
             </Stat>
           </div>
 
-          <div className="mt-1 truncate text-[11px] text-label-3">{status}</div>
+          <div className="mt-1 text-[11px] leading-snug text-label-3">{status}</div>
         </div>
 
         <div className="material pointer-events-auto flex shrink-0 rounded-[var(--radius-md)] p-0.5">
