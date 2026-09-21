@@ -227,11 +227,18 @@ function analyseBrightness(
       phase,
       found.look.elevation,
     );
+
+    // Bloßes Auge gilt für den gesamten Bogen, nicht nur für das
+    // Helligkeitsmaximum: Der hellste Moment kann horizontnah liegen und dort
+    // an der Mindesthöhe scheitern, während das Objekt kurz darauf hoch am
+    // Himmel steht – minimal schwächer, aber klar zu sehen.
+    if (magnitude <= NAKED_EYE_LIMIT && found.look.elevation >= NAKED_EYE_MIN_ELEVATION) {
+      result.nakedEye = true;
+    }
+
     if (magnitude < result.peakMagnitude) {
       result.peakMagnitude = magnitude;
       result.illumination = illuminatedFraction(phase);
-      result.nakedEye =
-        magnitude <= NAKED_EYE_LIMIT && found.look.elevation >= NAKED_EYE_MIN_ELEVATION;
     }
   }
 
@@ -274,7 +281,7 @@ export function predictNextPass(
     // Höchststand + Untergang verfolgen.
     let maxEl = -Math.PI;
     let tca = aos;
-    let los = aos;
+    let los = -1;
     let lastAbove = aos;
     let scanEl = el;
     let scanMs = t;
@@ -294,6 +301,11 @@ export function predictNextPass(
       scanEl = elevationAt(satrec, new Date(scanMs), observer);
       if (Number.isNaN(scanEl)) return null;
     }
+
+    // Stark exzentrische Bahnen bleiben länger über dem Horizont, als das
+    // Suchfenster reicht. Dann begrenzt der letzte bestätigte Punkt oberhalb
+    // des Horizonts den Überflug – sonst meldete die Vorhersage 0 s Dauer.
+    if (los < 0) los = lastAbove;
 
     if (maxEl < minEl) {
       prevEl = scanEl;

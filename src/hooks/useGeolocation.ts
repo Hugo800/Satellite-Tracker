@@ -43,15 +43,19 @@ export function useGeolocation(): void {
       setObserver(next);
     };
 
+    // Reihenfolge zählt: `setObserver` löscht `geoError` – ein echter Fix soll
+    // den Hinweis verschwinden lassen, der Fallback ihn aber stehen lassen.
     if (!('geolocation' in navigator)) {
-      setGeoError('Geolocation nicht verfügbar – Standardstandort aktiv.');
       accept(DEFAULT_OBSERVER);
+      setGeoError('Geolocation nicht verfügbar – Standardstandort aktiv.');
       return;
     }
 
     let settled = false;
     const fallbackTimer = window.setTimeout(() => {
-      if (!settled) accept(DEFAULT_OBSERVER);
+      if (settled) return;
+      accept(DEFAULT_OBSERVER);
+      setGeoError('Ortung dauert zu lange – Standardstandort aktiv.');
     }, 8000);
 
     const watchId = navigator.geolocation.watchPosition(
@@ -67,8 +71,8 @@ export function useGeolocation(): void {
       (error) => {
         settled = true;
         window.clearTimeout(fallbackTimer);
-        setGeoError(`Ortung fehlgeschlagen (${error.message}) – Standardstandort aktiv.`);
         accept(DEFAULT_OBSERVER);
+        setGeoError(`Ortung fehlgeschlagen (${error.message}) – Standardstandort aktiv.`);
       },
       // Meterpräzision bringt hier nichts, kostet aber Akku und erzeugt Update-Sturm.
       { enableHighAccuracy: false, maximumAge: 120_000, timeout: 15_000 },
