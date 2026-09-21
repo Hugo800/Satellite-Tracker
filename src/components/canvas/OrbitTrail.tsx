@@ -6,7 +6,7 @@ import { Color, Vector3 } from 'three';
 import { engine } from '../../hooks/useSatelliteEngine';
 import { trailState } from '../../state/runtime';
 import { useAppStore } from '../../state/store';
-import { SKY_RADIUS } from './SatelliteField';
+import { SKY_RADIUS } from '../../data/groups';
 
 const SAMPLES = 220;
 const TRAIL_RADIUS = SKY_RADIUS * 0.99;

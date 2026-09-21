@@ -1,17 +1,32 @@
 /// <reference lib="webworker" />
 /**
- * SGP4-Worker.
+ * SGP4-Worker – eine Kachel („Shard“) des Propagations-Pools.
  *
- * Verantwortlich für: TLE-Abruf, Katalogaufbau, kontinuierliche Propagation
- * tausender Satelliten, Erdschatten-Klassifikation, Bahnspuren und
- * Überflug-Vorhersagen. Der Main-Thread erhält ausschließlich flache
- * Float32Array-Buffer (transferable) – kein Objekt-Churn, kein GC-Stottern.
+ * Jede Instanz sieht denselben, in identischer Reihenfolge aufgebauten Katalog
+ * und ist für die globalen Indizes mit `index % shardCount === shardIndex`
+ * zuständig. Weil die Zuteilung rein über den Modulo läuft, bleiben alle
+ * Indizes stabil, während der Katalog wächst – ein nachgeladener Gesamtkatalog
+ * verschiebt keine bestehende Auswahl und keine laufende Bahnspur.
+ *
+ * Shard 0 ist zusätzlich der Lader: Nur er ruft CelesTrak ab (sonst liefen N
+ * parallele Abrufe derselben URL ins Rate-Limit) und reicht den Rohtext über
+ * den Main-Thread an die übrigen Shards weiter.
+ *
+ * Der Main-Thread erhält ausschließlich flache, transferierbare
+ * Float32Array-Buffer – und gibt sie zum Wiederverwenden zurück.
  */
 import { twoline2satrec } from 'satellite.js';
 import type { SatRec } from 'satellite.js';
-import { FALLBACK_TLE, HIGHLIGHT_NORAD_IDS, TLE_SOURCES } from '../data/tleSources';
+import { FALLBACK_TLE, GROUP_LOAD_ORDER, HIGHLIGHT_NORAD_IDS, TLE_SOURCES } from '../data/tleSources';
 import { geoToObserverGd, normalizeAngle } from '../math/coords';
-import { observerEciPosition, predictPasses, propagateEphemeris } from '../math/propagation';
+import {
+  buildObserverFrame,
+  buildTickFrame,
+  predictPasses,
+  propagateEphemeris,
+  propagateInto,
+} from '../math/propagation';
+import type { ObserverFrame } from '../math/propagation';
 import { sunEciUnitVector } from '../math/sun';
 import { standardMagnitudeFor } from '../math/visibility';
 import {
@@ -31,24 +46,63 @@ import type {
   ObserverGd,
   SatelliteGroup,
   SatelliteMeta,
+  TimeBase,
   WorkerRequest,
   WorkerResponse,
 } from '../types';
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 
+const OFFSETS = {
+  az: T_AZ,
+  el: T_EL,
+  range: T_RANGE,
+  alt: T_ALT,
+  speed: T_SPEED,
+  eclipsed: T_ECLIPSED,
+  lat: T_LAT,
+  lon: T_LON,
+  mag: T_MAG,
+} as const;
+
 interface Entry {
   meta: SatelliteMeta;
   satrec: SatRec;
 }
 
-const entries: Entry[] = [];
+/* ------------------------------------------------------------------ */
+/* Shard-Zustand                                                        */
+/* ------------------------------------------------------------------ */
+
+let shardIndex = 0;
+let shardCount = 1;
+/** Ist dieser Shard der Lader? Nur er darf CelesTrak abrufen. */
+let isLoader = true;
+
+/**
+ * Eigene Einträge, dicht gepackt: Slot `k` entspricht dem globalen Index
+ * `shardIndex + k * shardCount`. Lücken (defektes TLE) bleiben `null`, damit
+ * die Zuordnung rechnerisch bleibt und ohne Map auskommt.
+ */
+const own: Array<Entry | null> = [];
+/** Globaler Index je NORAD-ID – in *jedem* Shard identisch aufgebaut. */
+const knownIds = new Map<string, number>();
+/** Aus dem Offline-Fallback erzeugte IDs, die echte Daten überschreiben dürfen. */
+const provisionalIds = new Set<string>();
+let nextIndex = 0;
+
 let observer: ObserverGd | null = null;
-let timer: ReturnType<typeof setInterval> | null = null;
+let observerFrame: ObserverFrame | null = null;
+
+let timer: ReturnType<typeof setTimeout> | null = null;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
-let timeScale = 1;
-let virtualTimeMs = Date.now();
-let lastRealMs = Date.now();
+let baseIntervalMs = 100;
+let running = false;
+
+let timeBase: TimeBase = { originRealMs: Date.now(), originVirtualMs: Date.now(), scale: 1 };
+
+/** Freigegebene Buffer des Main-Threads – vermeidet eine Allokation je Tick. */
+const bufferPool: ArrayBuffer[] = [];
 
 /** Gestaffelte Wartezeiten, bis gedrosselte CelesTrak-Gruppen erneut versucht werden. */
 const RETRY_DELAYS_MS = [45_000, 3 * 60_000, 10 * 60_000];
@@ -60,57 +114,114 @@ function post(message: WorkerResponse, transfer?: Transferable[]): void {
   ctx.postMessage(message, transfer ?? []);
 }
 
+/** Virtuelle Zeit als reine Funktion – dadurch rechnen alle Shards dieselbe Epoche. */
+function virtualNow(): number {
+  return timeBase.originVirtualMs + (Date.now() - timeBase.originRealMs) * timeBase.scale;
+}
+
+const ownSlotFor = (globalIndex: number): number => (globalIndex - shardIndex) / shardCount;
+const isMine = (globalIndex: number): boolean => globalIndex % shardCount === shardIndex;
+
 /* ------------------------------------------------------------------ */
 /* Katalog                                                              */
 /* ------------------------------------------------------------------ */
 
-function parseTle(text: string, group: SatelliteGroup, limit: number): void {
-  const lines = text
-    .split(/\r?\n/)
-    .map((l) => l.trimEnd())
-    .filter((l) => l.length > 0);
+function makeMeta(
+  index: number,
+  name: string,
+  noradId: string,
+  group: SatelliteGroup,
+  satrec: SatRec,
+): SatelliteMeta {
+  const meanMotionRadMin = satrec.no;
+  return {
+    index,
+    name: name.trim(),
+    noradId,
+    group,
+    highlight: HIGHLIGHT_NORAD_IDS.has(noradId),
+    periodMin: meanMotionRadMin > 0 ? (2 * Math.PI) / meanMotionRadMin : 0,
+    inclinationDeg: (satrec.inclo * 180) / Math.PI,
+    standardMagnitude: standardMagnitudeFor(noradId, group),
+  };
+}
 
-  // Mengen-Lookup statt linearer Suche: Starlink allein bringt einige tausend
-  // Sätze mit, ein `some()` pro Zeile wäre quadratisch.
-  const knownIds = new Set(entries.map((e) => e.meta.noradId));
+/**
+ * Nimmt einen TLE-Block in den Katalog auf.
+ *
+ * Bewusst **ohne** Mengenbegrenzung – im Modus „Alle“ soll ausnahmslos jedes
+ * Objekt propagiert werden. Jede NORAD-ID bekommt genau einen, dauerhaft
+ * gültigen Index; die Gruppe des ersten Auftretens gewinnt, weil die
+ * spezifischen Gruppen vor dem Gesamtkatalog geladen werden.
+ *
+ * @returns Metadaten der in diesem Shard neu entstandenen Objekte.
+ */
+function parseTle(text: string, group: SatelliteGroup): SatelliteMeta[] {
+  const lines = text.split(/\r?\n/);
+  const added: SatelliteMeta[] = [];
 
-  let added = 0;
-  for (let i = 0; i + 2 < lines.length && added < limit; i += 3) {
-    const name = lines[i];
+  for (let i = 0; i + 2 < lines.length; i += 1) {
+    const name = lines[i].trim();
     const l1 = lines[i + 1];
     const l2 = lines[i + 2];
-    if (!name || !l1 || !l2 || !l1.startsWith('1 ') || !l2.startsWith('2 ')) continue;
+    if (!l1 || !l2 || !l1.startsWith('1 ') || !l2.startsWith('2 ')) continue;
 
     const noradId = l1.slice(2, 7).trim();
-    if (knownIds.has(noradId)) continue;
+    if (!noradId) continue;
+    // Der Dreierblock ist verbraucht – die beiden Elementzeilen nicht erneut prüfen.
+    i += 2;
 
+    const existing = knownIds.get(noradId);
+    let index: number;
+
+    if (existing !== undefined) {
+      // Frische Daten dürfen einen Offline-Platzhalter an *derselben* Stelle
+      // ersetzen; alles andere bleibt, wie es ist.
+      if (!provisionalIds.has(noradId)) continue;
+      provisionalIds.delete(noradId);
+      index = existing;
+    } else {
+      index = nextIndex;
+      nextIndex += 1;
+      knownIds.set(noradId, index);
+    }
+
+    if (!isMine(index)) continue;
+
+    const slot = ownSlotFor(index);
     let satrec: SatRec;
     try {
       satrec = twoline2satrec(l1, l2);
     } catch {
+      own[slot] = null;
       continue;
     }
-    if (!satrec || (satrec as unknown as { error?: number }).error) continue;
+    if (!satrec || (satrec as unknown as { error?: number }).error) {
+      own[slot] = null;
+      continue;
+    }
 
-    const meanMotionRadMin = satrec.no;
-    const periodMin = meanMotionRadMin > 0 ? (2 * Math.PI) / meanMotionRadMin : 0;
-
-    knownIds.add(noradId);
-    entries.push({
-      satrec,
-      meta: {
-        index: entries.length,
-        name: name.trim(),
-        noradId,
-        group,
-        highlight: HIGHLIGHT_NORAD_IDS.has(noradId),
-        periodMin,
-        inclinationDeg: (satrec.inclo * 180) / Math.PI,
-        standardMagnitude: standardMagnitudeFor(noradId, group),
-      },
-    });
-    added += 1;
+    const meta = makeMeta(index, name || `NORAD ${noradId}`, noradId, group, satrec);
+    own[slot] = { satrec, meta };
+    added.push(meta);
   }
+
+  // Lücken auffüllen, damit `own.length` der Slot-Zahl entspricht.
+  const slots = Math.ceil(Math.max(0, nextIndex - shardIndex) / shardCount);
+  while (own.length < slots) own.push(null);
+
+  return added;
+}
+
+function ingest(text: string, group: SatelliteGroup): void {
+  const added = parseTle(text, group);
+  post({
+    type: 'catalog',
+    shardIndex,
+    offset: shardIndex,
+    total: nextIndex,
+    catalog: added,
+  });
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -179,38 +290,39 @@ async function fetchTle(source: (typeof TLE_SOURCES)[SatelliteGroup]): Promise<s
 }
 
 /**
- * Lädt Gruppen nach. Ohne `reset` werden vorhandene Einträge beibehalten –
- * die Telemetrie-Indizes (und damit Auswahl und Spuren im Main-Thread)
- * bleiben dabei stabil.
+ * Lädt Gruppen nach. Der Katalog wächst dabei ausschließlich an – bestehende
+ * Indizes bleiben gültig, ein Reset findet nicht statt.
  */
-async function loadGroups(groups: SatelliteGroup[], reset: boolean): Promise<void> {
-  if (reset) {
-    entries.length = 0;
+async function loadGroups(groups: SatelliteGroup[]): Promise<void> {
+  if (!isLoader) return;
+
+  if (nextIndex === 0) {
     // Sofort etwas Sichtbares: Kernobjekte aus dem eingebauten Katalog. Sie
-    // werden verworfen, sobald die erste echte Gruppe eintrifft.
-    parseTle(FALLBACK_TLE, 'stations', 64);
-    post({ type: 'catalog', catalog: entries.map((e) => e.meta) });
+    // werden an Ort und Stelle durch echte Daten ersetzt, sobald sie eintreffen.
+    for (const line of FALLBACK_TLE.split(/\r?\n/)) {
+      if (line.startsWith('1 ')) provisionalIds.add(line.slice(2, 7).trim());
+    }
+    post({ type: 'tle', group: 'stations', text: FALLBACK_TLE });
+    ingest(FALLBACK_TLE, 'stations');
   }
+
   post({ type: 'status', message: 'Lade TLE-Kataloge …', loading: true });
 
   const failed: SatelliteGroup[] = [];
-  let seedReplaced = !reset;
 
   for (const group of groups) {
     const source = TLE_SOURCES[group];
     try {
       const text = await fetchTle(source);
-      if (!seedReplaced) {
-        entries.length = 0;
-        seedReplaced = true;
-      }
-      parseTle(text, group, source.limit);
+      // Erst an die Geschwister verteilen, dann selbst einlesen: So sehen alle
+      // Shards die Gruppen in derselben Reihenfolge und vergeben dieselben Indizes.
+      post({ type: 'tle', group, text });
+      ingest(text, group);
       post({
         type: 'status',
-        message: `${source.label}: ${entries.length} Objekte`,
+        message: `${source.label}: ${nextIndex.toLocaleString('de-DE')} Objekte im Katalog`,
         loading: true,
       });
-      post({ type: 'catalog', catalog: entries.map((e) => e.meta) });
     } catch (err) {
       failed.push(group);
       post({
@@ -222,13 +334,17 @@ async function loadGroups(groups: SatelliteGroup[], reset: boolean): Promise<voi
     await sleep(GROUP_GAP_MS);
   }
 
-  if (entries.length === 0) {
-    parseTle(FALLBACK_TLE, 'stations', 64);
+  if (nextIndex === 0) {
+    post({ type: 'tle', group: 'stations', text: FALLBACK_TLE });
+    ingest(FALLBACK_TLE, 'stations');
     post({ type: 'error', message: 'Offline-Fallback aktiv – nur Kernobjekte verfügbar.' });
   }
 
-  post({ type: 'catalog', catalog: entries.map((e) => e.meta) });
-  post({ type: 'status', message: `${entries.length} Objekte im Katalog`, loading: false });
+  post({
+    type: 'status',
+    message: `${nextIndex.toLocaleString('de-DE')} Objekte im Katalog`,
+    loading: false,
+  });
 
   // CelesTrak gibt Gruppen erst nach Ablauf des Update-Intervalls wieder frei;
   // ein späterer Versuch holt sie nach, ohne den Nutzer zu behelligen.
@@ -238,7 +354,7 @@ async function loadGroups(groups: SatelliteGroup[], reset: boolean): Promise<voi
       retryStep += 1;
       retryTimer = setTimeout(() => {
         retryTimer = null;
-        void loadGroups(failed, false);
+        void loadGroups(failed);
       }, delay);
     }
   } else {
@@ -252,51 +368,88 @@ function loadCatalog(groups: SatelliteGroup[]): Promise<void> {
     retryTimer = null;
   }
   retryStep = 0;
-  return loadGroups(groups, true);
+  const ordered = GROUP_LOAD_ORDER.filter((g) => groups.includes(g));
+  return loadGroups(ordered.length > 0 ? ordered : groups);
 }
 
 /* ------------------------------------------------------------------ */
 /* Propagations-Schleife                                                */
 /* ------------------------------------------------------------------ */
 
-function tick(): void {
-  if (!observer || entries.length === 0) return;
+function takeBuffer(byteLength: number): Float32Array {
+  for (let i = bufferPool.length - 1; i >= 0; i -= 1) {
+    if (bufferPool[i].byteLength === byteLength) {
+      const [buffer] = bufferPool.splice(i, 1);
+      return new Float32Array(buffer);
+    }
+  }
+  // Der Katalog ist gewachsen: alte Größen fliegen raus statt sich anzusammeln.
+  bufferPool.length = 0;
+  return new Float32Array(byteLength / 4);
+}
 
-  const nowReal = Date.now();
-  virtualTimeMs += (nowReal - lastRealMs) * timeScale;
-  lastRealMs = nowReal;
+function tick(): number {
+  const frame = observerFrame;
+  if (!frame || own.length === 0) return 0;
 
-  const date = new Date(virtualTimeMs);
-  const sunUnit = sunEciUnitVector(date);
-  const observerEci = observerEciPosition(observer, date);
-  const buffer = new Float32Array(entries.length * TELEMETRY_STRIDE);
+  const startedAt = performance.now();
+  const timeMs = virtualNow();
+  const date = new Date(timeMs);
+  const tickFrame = buildTickFrame(date, observer as ObserverGd);
 
-  for (let i = 0; i < entries.length; i += 1) {
-    const base = i * TELEMETRY_STRIDE;
-    const entry = entries[i];
-    const eph = propagateEphemeris(entry.satrec, date, observer, sunUnit, {
-      observerEci,
-      standardMagnitude: entry.meta.standardMagnitude,
-    });
-    if (!eph) {
+  const count = own.length;
+  const buffer = takeBuffer(count * TELEMETRY_STRIDE * 4);
+
+  for (let k = 0; k < count; k += 1) {
+    const base = k * TELEMETRY_STRIDE;
+    const entry = own[k];
+    if (
+      !entry ||
+      !propagateInto(entry.satrec, frame, tickFrame, entry.meta.standardMagnitude, buffer, base, OFFSETS)
+    ) {
+      // Der Buffer ist recycelt – ohne Löschen stünden hier die Werte des
+      // vorigen Takts. `range = NaN` genügt zwar allen Verbrauchern als
+      // Ausschlusskriterium, aber Altdaten in einem Buffer sind eine Falle.
+      buffer.fill(0, base, base + TELEMETRY_STRIDE);
       buffer[base + T_EL] = -Math.PI / 2;
       buffer[base + T_RANGE] = Number.NaN;
-      continue;
     }
-    buffer[base + T_AZ] = eph.azimuth;
-    buffer[base + T_EL] = eph.elevation;
-    buffer[base + T_RANGE] = eph.rangeKm;
-    buffer[base + T_ALT] = eph.altitudeKm;
-    buffer[base + T_SPEED] = eph.speedKmS;
-    buffer[base + T_ECLIPSED] = eph.eclipsed ? 1 : 0;
-    buffer[base + T_LAT] = eph.latitudeDeg;
-    buffer[base + T_LON] = eph.longitudeDeg;
-    buffer[base + T_MAG] = eph.magnitude;
   }
 
-  post({ type: 'tick', time: virtualTimeMs, count: entries.length, buffer: buffer.buffer }, [
-    buffer.buffer,
-  ]);
+  const durationMs = performance.now() - startedAt;
+
+  post(
+    {
+      type: 'tick',
+      shardIndex,
+      offset: shardIndex,
+      count,
+      time: timeMs,
+      durationMs,
+      buffer: buffer.buffer as ArrayBuffer,
+    },
+    [buffer.buffer as ArrayBuffer],
+  );
+
+  return durationMs;
+}
+
+/**
+ * Selbsttaktende Schleife statt `setInterval`.
+ *
+ * Auf schwacher Hardware oder bei einem sehr großen Shard kann ein Tick länger
+ * dauern als das Zielintervall. `setInterval` würde die Aufrufe dann stapeln,
+ * bis der Worker nur noch propagiert und auf Nachrichten (Auswahl, Bahnspur,
+ * Überflugsuche) nicht mehr reagiert. Hier wächst stattdessen der Abstand mit,
+ * sodass höchstens der unten gesetzte Anteil des Threads verbraucht wird.
+ */
+const MAX_DUTY_CYCLE = 0.65;
+
+function schedule(): void {
+  if (!running) return;
+  const durationMs = tick();
+  const wait = Math.max(baseIntervalMs, durationMs / MAX_DUTY_CYCLE) - durationMs;
+  timer = setTimeout(schedule, Math.max(8, wait));
 }
 
 /* ------------------------------------------------------------------ */
@@ -304,15 +457,17 @@ function tick(): void {
 /* ------------------------------------------------------------------ */
 
 function buildTrail(index: number, fromMin: number, toMin: number, samples: number): void {
-  const entry = entries[index];
+  if (!isMine(index)) return;
+  const entry = own[ownSlotFor(index)];
   if (!entry || !observer || samples < 2) return;
 
   const points = new Float32Array(samples * 3);
   const spanMs = (toMin - fromMin) * 60_000;
-  const sunUnit = sunEciUnitVector(new Date(virtualTimeMs));
+  const timeMs = virtualNow();
+  const sunUnit = sunEciUnitVector(new Date(timeMs));
 
   for (let i = 0; i < samples; i += 1) {
-    const t = virtualTimeMs + fromMin * 60_000 + (spanMs * i) / (samples - 1);
+    const t = timeMs + fromMin * 60_000 + (spanMs * i) / (samples - 1);
     const eph = propagateEphemeris(entry.satrec, new Date(t), observer, sunUnit);
     if (!eph) continue;
     const az = normalizeAngle(eph.azimuth);
@@ -333,32 +488,53 @@ ctx.onmessage = (event: MessageEvent<WorkerRequest>) => {
   const msg = event.data;
 
   switch (msg.type) {
+    case 'init':
+      shardIndex = msg.shardIndex;
+      shardCount = msg.shardCount;
+      isLoader = msg.shardIndex === 0;
+      break;
+
     case 'load':
       void loadCatalog(msg.groups);
       break;
 
+    case 'tle':
+      // Weitergereichter Rohtext des Laders – nur die Nicht-Lader lesen ihn ein.
+      if (!isLoader) {
+        if (msg.group === 'stations' && nextIndex === 0) {
+          for (const line of msg.text.split(/\r?\n/)) {
+            if (line.startsWith('1 ')) provisionalIds.add(line.slice(2, 7).trim());
+          }
+        }
+        ingest(msg.text, msg.group);
+      }
+      break;
+
     case 'observer':
       observer = geoToObserverGd(msg.observer as GeoCoord);
+      observerFrame = buildObserverFrame(observer);
       break;
 
     case 'start':
-      if (timer !== null) clearInterval(timer);
-      lastRealMs = Date.now();
-      timer = setInterval(tick, msg.intervalMs);
-      tick();
+      baseIntervalMs = msg.intervalMs;
+      if (running) break;
+      running = true;
+      schedule();
       break;
 
     case 'stop':
-      if (timer !== null) clearInterval(timer);
+      running = false;
+      if (timer !== null) clearTimeout(timer);
       timer = null;
       break;
 
-    case 'timeScale':
-      // Zurück auf Echtzeit heißt: wieder auf die Wanduhr aufsetzen. Sonst
-      // behielte die Szene den Vorlauf, den der Zeitraffer angesammelt hat.
-      if (msg.value === 1) virtualTimeMs = Date.now();
-      lastRealMs = Date.now();
-      timeScale = msg.value;
+    case 'time':
+      timeBase = msg.base;
+      break;
+
+    case 'recycle':
+      // Höchstens zwei Buffer vorhalten – mehr bringt nichts und bindet Speicher.
+      if (bufferPool.length < 2) bufferPool.push(msg.buffer);
       break;
 
     case 'trail':
@@ -366,13 +542,14 @@ ctx.onmessage = (event: MessageEvent<WorkerRequest>) => {
       break;
 
     case 'pass': {
-      const entry = entries[msg.index];
+      if (!isMine(msg.index)) break;
+      const entry = own[ownSlotFor(msg.index)];
       if (!entry || !observer) {
         post({ type: 'pass', index: msg.index, passes: [] });
         break;
       }
       const passes = predictPasses(entry.satrec, observer, {
-        fromMs: virtualTimeMs,
+        fromMs: virtualNow(),
         searchHours: msg.searchHours,
         stepSec: 30,
         minElevationDeg: 1,

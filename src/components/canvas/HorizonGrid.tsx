@@ -61,8 +61,8 @@ function CardinalLabel({
     () =>
       createTextTexture(label, {
         fontSize: major ? 120 : 84,
-        color: major ? '#bae6fd' : '#7dd3fc',
-        glow: 'rgba(14, 165, 233, 0.85)',
+        color: major ? '#ffffff' : '#d8dce6',
+        glow: 'rgba(10, 132, 255, 0.55)',
       }),
     [label, major],
   );
@@ -93,8 +93,8 @@ function AltitudeLabel({ elevation }: { elevation: number }): React.JSX.Element 
     () =>
       createTextTexture(`${elevation}°`, {
         fontSize: 64,
-        color: '#7dd3fc',
-        glow: 'rgba(14, 165, 233, 0.5)',
+        color: '#c3c8d4',
+        glow: 'rgba(10, 132, 255, 0.32)',
         bold: false,
       }),
     [elevation],
@@ -138,17 +138,17 @@ export function HorizonGrid(): React.JSX.Element {
   return (
     <group>
       <lineSegments geometry={geometry} renderOrder={-10}>
-        <lineBasicMaterial color="#38bdf8" transparent opacity={0.16} depthWrite={false} />
+        <lineBasicMaterial color="#8e93a3" transparent opacity={0.14} depthWrite={false} />
       </lineSegments>
 
       <lineLoop geometry={horizonGeometry} renderOrder={-9}>
-        <lineBasicMaterial color="#67e8f9" transparent opacity={0.55} depthWrite={false} />
+        <lineBasicMaterial color="#0a84ff" transparent opacity={0.45} depthWrite={false} />
       </lineLoop>
 
       {/* Boden: verdeckt Objekte unter dem Horizont, bleibt aber lesbar dunkel. */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -1.5, 0]} renderOrder={-8}>
         <circleGeometry args={[GRID_RADIUS * 1.02, 96]} />
-        <meshBasicMaterial color="#04070d" transparent opacity={0.94} side={DoubleSide} />
+        <meshBasicMaterial color="#000000" transparent opacity={0.94} side={DoubleSide} />
       </mesh>
 
       {CARDINALS.map((c) => (

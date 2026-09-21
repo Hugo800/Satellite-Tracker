@@ -1,22 +1,33 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import {
   AlertTriangle,
   Compass,
   List,
   MapPin,
+  Monitor,
   Moon,
+  MoonStar,
   Orbit,
   Satellite,
+  Sun,
   Sunrise,
 } from 'lucide-react';
 import { compassLabel } from '../../math/coords';
 import { useDeviceOrientation } from '../../hooks/useDeviceOrientation';
 import { TELEMETRY_STRIDE, T_ECLIPSED, T_EL, T_MAG, T_RANGE } from '../../math/telemetryLayout';
 import { passesSkyFilter } from '../../math/visibility';
-import { telemetry, viewState } from '../../state/runtime';
+import { catalogIndex, telemetry, viewState } from '../../state/runtime';
 import { useAppStore } from '../../state/store';
-import { formatNumber } from '../../utils/format';
+import { formatCount, formatNumber } from '../../utils/format';
+import type { ThemePreference } from '../../types';
 import { ModeSwitch } from './ModeSwitch';
+
+const THEME_CYCLE: ThemePreference[] = ['system', 'light', 'dark'];
+const THEME_LABEL: Record<ThemePreference, string> = {
+  system: 'Erscheinungsbild: System',
+  light: 'Erscheinungsbild: Hell',
+  dark: 'Erscheinungsbild: Dunkel',
+};
 
 function IconButton({
   active,
@@ -36,14 +47,32 @@ function IconButton({
       aria-label={label}
       aria-pressed={active}
       onClick={onClick}
-      className={`flex h-10 w-10 items-center justify-center rounded-lg border transition ${
-        active
-          ? 'border-sky-400/70 bg-sky-400/25 text-sky-100'
-          : 'border-sky-400/20 bg-slate-900/70 text-sky-300 hover:bg-sky-400/10'
-      }`}
+      className="icon-button"
     >
       {children}
     </button>
+  );
+}
+
+function Stat({
+  icon,
+  children,
+  title,
+}: {
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  title?: string;
+}): React.JSX.Element {
+  return (
+    <span
+      className="inline-flex items-center gap-1 text-[11.5px] text-label-2"
+      title={title}
+    >
+      <span className="text-label-3" aria-hidden>
+        {icon}
+      </span>
+      {children}
+    </span>
   );
 }
 
@@ -54,7 +83,7 @@ export function TopBar(): React.JSX.Element {
   const moon = useAppStore((s) => s.moon);
   const status = useAppStore((s) => s.status);
   const loading = useAppStore((s) => s.loading);
-  const catalog = useAppStore((s) => s.catalog);
+  const catalogSize = useAppStore((s) => s.catalog.length);
   const mode = useAppStore((s) => s.filters.mode);
   const arEnabled = useAppStore((s) => s.arEnabled);
   const arSupported = useAppStore((s) => s.arSupported);
@@ -64,6 +93,8 @@ export function TopBar(): React.JSX.Element {
   const showTrails = useAppStore((s) => s.showTrails);
   const toggleTrails = useAppStore((s) => s.toggleTrails);
   const setDrawerOpen = useAppStore((s) => s.setDrawerOpen);
+  const theme = useAppStore((s) => s.theme);
+  const setTheme = useAppStore((s) => s.setTheme);
   const errors = useAppStore((s) => s.errors);
   const geoError = useAppStore((s) => s.geoError);
 
@@ -71,21 +102,20 @@ export function TopBar(): React.JSX.Element {
   const headingRef = useRef<HTMLSpanElement>(null);
   const skyCountRef = useRef<HTMLSpanElement>(null);
 
-  const starlinkFlags = useMemo(() => {
-    let maxIndex = 0;
-    for (const meta of catalog) maxIndex = Math.max(maxIndex, meta.index);
-    const flags = new Uint8Array(maxIndex + 1);
-    for (const meta of catalog) flags[meta.index] = meta.group === 'starlink' ? 1 : 0;
-    return flags;
-  }, [catalog]);
+  const cycleTheme = useCallback(() => {
+    setTheme(THEME_CYCLE[(THEME_CYCLE.indexOf(theme) + 1) % THEME_CYCLE.length]);
+  }, [theme, setTheme]);
 
-  // Nur 1 Hz und ohne Re-Render: Der Zähler macht sichtbar, dass stets nur ein
-  // kleiner Teil des Katalogs gleichzeitig über dem Horizont steht.
+  // Nur 1 Hz und ohne Re-Render: Der Zähler macht sichtbar, wie viel des
+  // Katalogs gerade tatsächlich über dem Horizont steht. Die Starlink-Flags
+  // kommen aus dem vorberechneten Index – bei fünfstelligen Katalogen wäre ein
+  // String-Vergleich je Objekt spürbar.
   useEffect(() => {
     const update = () => {
       const node = skyCountRef.current;
       if (!node) return;
       const data = telemetry.data;
+      const starlinkFlags = catalogIndex.starlink;
       let count = 0;
       for (let i = 0; i < telemetry.count; i += 1) {
         const base = i * TELEMETRY_STRIDE;
@@ -102,12 +132,12 @@ export function TopBar(): React.JSX.Element {
           count += 1;
         }
       }
-      node.textContent = String(count);
+      node.textContent = formatCount(count);
     };
     update();
     const id = window.setInterval(update, 1000);
     return () => window.clearInterval(id);
-  }, [mode, starlinkFlags]);
+  }, [mode]);
 
   useEffect(() => {
     let frame = 0;
@@ -122,52 +152,61 @@ export function TopBar(): React.JSX.Element {
     return () => cancelAnimationFrame(frame);
   }, []);
 
+  const ThemeIcon = theme === 'light' ? Sun : theme === 'dark' ? Moon : Monitor;
+
   return (
     <div
-      className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col gap-2 p-3"
-      style={{ paddingTop: 'calc(var(--safe-top) + 0.75rem)' }}
+      className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col gap-2.5 p-3"
+      style={{
+        paddingTop: 'calc(var(--safe-top) + 0.75rem)',
+        paddingLeft: 'calc(var(--safe-left) + 0.75rem)',
+        paddingRight: 'calc(var(--safe-right) + 0.75rem)',
+      }}
     >
       <div className="flex items-start gap-2">
-        <div className="hud-panel hud-scan pointer-events-auto relative min-w-0 flex-1 overflow-hidden rounded-xl px-3 py-2">
-          <div className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.18em] text-sky-200 uppercase">
-            <Satellite size={13} className={loading ? 'animate-hud-pulse' : ''} />
-            Orbital Atlas
+        <div className="material pointer-events-auto min-w-0 flex-1 rounded-[var(--radius-md)] px-3.5 py-2.5">
+          <div className="flex items-center gap-1.5">
+            <Satellite
+              size={14}
+              strokeWidth={2.2}
+              className={loading ? 'animate-soft-pulse text-accent' : 'text-accent'}
+              aria-hidden
+            />
+            <span className="text-[15px] font-semibold tracking-[-0.01em] text-label">
+              Orbital Atlas
+            </span>
           </div>
 
-          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-sky-300/70">
-            <span
-              className="inline-flex items-center gap-1 tabular-nums"
-              title="Objekte im Sichtbereich / Objekte im Katalog"
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <Stat
+              icon={<Orbit size={11} strokeWidth={2.2} />}
+              title="Objekte über dem Horizont / Objekte im Katalog"
             >
-              <Orbit size={10} />
-              <span ref={skyCountRef}>0</span>/{catalog.length} Obj.
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <MapPin size={10} />
+              <span className="font-medium text-label">
+                <span ref={skyCountRef}>0</span>
+              </span>
+              <span className="text-label-3">/ {formatCount(catalogSize)}</span>
+            </Stat>
+            <Stat icon={<MapPin size={11} strokeWidth={2.2} />}>
               {observer
                 ? `${formatNumber(observer.latitudeDeg, 3)}°, ${formatNumber(observer.longitudeDeg, 3)}°`
                 : 'Ortung läuft …'}
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <Sunrise size={10} />
-              Sonne {formatNumber(sun.altitudeDeg, 0)}°
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <Moon size={10} />
-              Mond {formatNumber(moon.altitudeDeg, 0)}°
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <Compass size={10} />
-              <span ref={headingRef} className="tabular-nums">
-                –
-              </span>
-            </span>
+            </Stat>
+            <Stat icon={<Sunrise size={11} strokeWidth={2.2} />} title="Sonnenhöhe">
+              {formatNumber(sun.altitudeDeg, 0)}°
+            </Stat>
+            <Stat icon={<MoonStar size={11} strokeWidth={2.2} />} title="Mondhöhe">
+              {formatNumber(moon.altitudeDeg, 0)}°
+            </Stat>
+            <Stat icon={<Compass size={11} strokeWidth={2.2} />} title="Blickrichtung">
+              <span ref={headingRef}>–</span>
+            </Stat>
           </div>
 
-          <div className="mt-0.5 truncate text-[10px] text-slate-500">{status}</div>
+          <div className="mt-1 truncate text-[11px] text-label-3">{status}</div>
         </div>
 
-        <div className="pointer-events-auto flex gap-1.5">
+        <div className="material pointer-events-auto flex shrink-0 rounded-[var(--radius-md)] p-0.5">
           <IconButton
             active={arEnabled}
             label={arEnabled ? 'AR-Modus beenden' : 'AR-Modus (Kompass) starten'}
@@ -176,60 +215,86 @@ export function TopBar(): React.JSX.Element {
               else void enable();
             }}
           >
-            <Compass size={18} />
+            <Compass size={19} strokeWidth={2} aria-hidden />
           </IconButton>
-          <IconButton active={showTrails} label="Bahnspur ein/aus" onClick={toggleTrails}>
-            <Orbit size={18} />
+          <IconButton active={showTrails} label="Bahnspuren ein/aus" onClick={toggleTrails}>
+            <Orbit size={19} strokeWidth={2} aria-hidden />
           </IconButton>
-          <IconButton active={nightMode} label="Nachtmodus (Rotlicht)" onClick={toggleNightMode}>
-            <Moon size={18} />
+          <IconButton
+            active={nightMode}
+            label="Nachtmodus (Rotlicht)"
+            onClick={toggleNightMode}
+          >
+            <MoonStar size={19} strokeWidth={2} aria-hidden />
           </IconButton>
-          <IconButton label="Satellitenliste" onClick={() => setDrawerOpen(true)}>
-            <List size={18} />
+          <IconButton label={THEME_LABEL[theme]} onClick={cycleTheme}>
+            <ThemeIcon size={19} strokeWidth={2} aria-hidden />
+          </IconButton>
+          <IconButton label="Satellitenliste öffnen" onClick={() => setDrawerOpen(true)}>
+            <List size={19} strokeWidth={2} aria-hidden />
           </IconButton>
         </div>
       </div>
 
-      {!arSupported && (
-        <div className="pointer-events-none self-start rounded-md border border-amber-400/30 bg-amber-950/40 px-2 py-1 text-[10px] text-amber-200">
-          Kein Orientierungssensor erkannt – Touch-Navigation aktiv.
-        </div>
-      )}
-
-      <div className="pointer-events-auto w-full max-w-xs">
+      <div className="material pointer-events-auto w-full max-w-[22rem] rounded-[var(--radius-sm)] p-0">
         <ModeSwitch compact />
       </div>
 
+      {!arSupported && (
+        <Notice tone="warning">Kein Orientierungssensor erkannt – Touch-Navigation aktiv.</Notice>
+      )}
+
       {arEnabled && compassStatus === 'calibrating' && (
-        <div className="pointer-events-none self-start rounded-md border border-amber-400/30 bg-amber-950/40 px-2 py-1 text-[10px] text-amber-200">
+        <Notice tone="warning">
           Kompass unpräzise – Gerät einige Male in einer liegenden Acht bewegen.
-        </div>
+        </Notice>
       )}
 
       {arEnabled && compassStatus === 'relative' && (
-        <div className="pointer-events-none self-start rounded-md border border-amber-400/30 bg-amber-950/40 px-2 py-1 text-[10px] text-amber-200">
+        <Notice tone="warning">
           Kein erdfester Kompass verfügbar – Nordrichtung kann abweichen.
-        </div>
+        </Notice>
       )}
 
       {geoError && (
-        <div className="pointer-events-none flex max-w-[92vw] items-start gap-1.5 self-start rounded-md border border-amber-400/30 bg-amber-950/40 px-2 py-1 text-[10px] text-amber-200">
-          <MapPin size={11} className="mt-px shrink-0" />
-          <span>{geoError}</span>
-        </div>
+        <Notice tone="warning" icon={<MapPin size={12} strokeWidth={2.2} aria-hidden />}>
+          {geoError}
+        </Notice>
       )}
 
       {/* Gleiche Meldung kann mehrfach auflaufen (Retry pro Gruppe) – daher
           Position statt Text als React-Key. */}
       {errors.slice(-2).map((message, i) => (
-        <div
+        <Notice
           key={`${i}-${message}`}
-          className="pointer-events-none flex max-w-[92vw] items-start gap-1.5 self-start rounded-md border border-rose-400/30 bg-rose-950/50 px-2 py-1 text-[10px] text-rose-200"
+          tone="critical"
+          icon={<AlertTriangle size={12} strokeWidth={2.2} aria-hidden />}
         >
-          <AlertTriangle size={11} className="mt-px shrink-0" />
-          <span>{message}</span>
-        </div>
+          {message}
+        </Notice>
       ))}
+    </div>
+  );
+}
+
+function Notice({
+  tone,
+  icon,
+  children,
+}: {
+  tone: 'warning' | 'critical';
+  icon?: React.ReactNode;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  const color = tone === 'critical' ? 'var(--critical)' : 'var(--warning)';
+  return (
+    <div
+      role="status"
+      className="material pointer-events-none flex max-w-[92vw] items-start gap-1.5 self-start rounded-[var(--radius-sm)] px-2.5 py-1.5 text-[12px] leading-snug"
+      style={{ color, borderColor: `color-mix(in srgb, ${color} 34%, transparent)` }}
+    >
+      {icon && <span className="mt-px shrink-0">{icon}</span>}
+      <span>{children}</span>
     </div>
   );
 }

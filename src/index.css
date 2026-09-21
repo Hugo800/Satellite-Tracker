@@ -1,60 +1,416 @@
 @import 'tailwindcss';
 
+/* ==================================================================== *
+ *  Orbital Atlas – Designsystem
+ *
+ *  Orientiert an den Apple Human Interface Guidelines: Systemschrift,
+ *  Materialien mit Unschärfe statt Flächen, Haarlinien als Trenner,
+ *  iOS-Systemfarben und die Bewegungskurven von UIKit.
+ *
+ *  Alle Farben liegen als semantische Tokens vor und werden für Hell und
+ *  Dunkel getrennt definiert. Der Dark-Mode ist bewusst OLED-freundlich –
+ *  die Grundfläche ist echtes Schwarz, die Panels sind durchscheinende
+ *  Materialien darüber.
+ * ==================================================================== */
+
 @theme {
-  --color-hud-bg: oklch(0.18 0.03 250 / 0.72);
-  --color-hud-line: oklch(0.72 0.14 220 / 0.45);
-  --color-hud-accent: oklch(0.78 0.15 220);
-  --color-hud-warn: oklch(0.82 0.17 75);
-  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Fira Code', monospace;
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Segoe UI', Roboto,
+    'Helvetica Neue', system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Semantische Farben – lösen sich zur Laufzeit über die Theme-Tokens auf. */
+  --color-label: var(--label);
+  --color-label-2: var(--label-2);
+  --color-label-3: var(--label-3);
+  --color-separator: var(--separator);
+  --color-fill: var(--fill);
+  --color-fill-2: var(--fill-2);
+  --color-accent: var(--accent);
+  --color-positive: var(--positive);
+  --color-warning: var(--warning);
+  --color-critical: var(--critical);
+  --color-highlight: var(--highlight);
+
+  /* Radien nach iOS-Maßstab. */
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
 }
 
+/* -------------------------------------------------------------------- */
+/* Paletten                                                              */
+/* -------------------------------------------------------------------- */
+
 :root {
-  color-scheme: dark;
+  /* Systemfarben iOS – hell */
+  --p-light-bg: #eef0f5;
+  --p-light-material: rgb(255 255 255 / 0.76);
+  --p-light-material-strong: rgb(255 255 255 / 0.9);
+  --p-light-separator: rgb(60 60 67 / 0.26);
+  --p-light-label: rgb(0 0 0 / 0.92);
+  --p-light-label-2: rgb(60 60 67 / 0.62);
+  --p-light-label-3: rgb(60 60 67 / 0.34);
+  --p-light-fill: rgb(118 118 128 / 0.12);
+  --p-light-fill-2: rgb(118 118 128 / 0.2);
+  --p-light-accent: #007aff;
+  --p-light-positive: #248a3d;
+  --p-light-warning: #b25000;
+  --p-light-critical: #d70015;
+  --p-light-highlight: #a05a00;
+  --p-light-thumb: #ffffff;
+  --p-light-scrim: rgb(0 0 0 / 0.28);
+  --p-light-shadow-1: 0 1px 2px rgb(0 0 0 / 0.08), 0 6px 20px rgb(0 0 0 / 0.1);
+  --p-light-shadow-2: 0 12px 40px rgb(0 0 0 / 0.18);
+  --p-light-thumb-shadow: 0 3px 8px rgb(0 0 0 / 0.12), 0 1px 1px rgb(0 0 0 / 0.04);
+
+  /* Systemfarben iOS – dunkel (OLED: echte Schwarzfläche) */
+  --p-dark-bg: #000000;
+  --p-dark-material: rgb(20 20 23 / 0.66);
+  --p-dark-material-strong: rgb(24 24 27 / 0.86);
+  --p-dark-separator: rgb(84 84 88 / 0.68);
+  --p-dark-label: rgb(255 255 255 / 0.96);
+  --p-dark-label-2: rgb(235 235 245 / 0.62);
+  --p-dark-label-3: rgb(235 235 245 / 0.34);
+  --p-dark-fill: rgb(120 120 128 / 0.24);
+  --p-dark-fill-2: rgb(120 120 128 / 0.36);
+  --p-dark-accent: #0a84ff;
+  --p-dark-positive: #30d158;
+  --p-dark-warning: #ff9f0a;
+  --p-dark-critical: #ff453a;
+  --p-dark-highlight: #ffd60a;
+  --p-dark-thumb: rgb(99 99 102 / 0.92);
+  --p-dark-scrim: rgb(0 0 0 / 0.5);
+  --p-dark-shadow-1: 0 1px 2px rgb(0 0 0 / 0.5), 0 8px 28px rgb(0 0 0 / 0.5);
+  --p-dark-shadow-2: 0 16px 48px rgb(0 0 0 / 0.6);
+  --p-dark-thumb-shadow: 0 3px 8px rgb(0 0 0 / 0.36), 0 1px 1px rgb(0 0 0 / 0.2);
+
+  /* Bewegung – die Kurven, die UIKit für Ein-/Ausblenden und Sheets nutzt. */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.42, 0.64, 1);
+  --t-fast: 140ms;
+  --t-base: 240ms;
+  --t-slow: 400ms;
+
+  /* Mindestmaß einer Trefferfläche (44 pt nach HIG). */
+  --tap: 44px;
+
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
 }
+
+/* -------------------------------------------------------------------- */
+/* Theme-Zuordnung: System → Hell → Dunkel, in dieser Vorrangfolge.      */
+/* -------------------------------------------------------------------- */
+
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: var(--p-light-bg);
+  --material: var(--p-light-material);
+  --material-strong: var(--p-light-material-strong);
+  --separator: var(--p-light-separator);
+  --label: var(--p-light-label);
+  --label-2: var(--p-light-label-2);
+  --label-3: var(--p-light-label-3);
+  --fill: var(--p-light-fill);
+  --fill-2: var(--p-light-fill-2);
+  --accent: var(--p-light-accent);
+  --positive: var(--p-light-positive);
+  --warning: var(--p-light-warning);
+  --critical: var(--p-light-critical);
+  --highlight: var(--p-light-highlight);
+  --thumb: var(--p-light-thumb);
+  --scrim: var(--p-light-scrim);
+  --shadow-1: var(--p-light-shadow-1);
+  --shadow-2: var(--p-light-shadow-2);
+  --thumb-shadow: var(--p-light-thumb-shadow);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: var(--p-dark-bg);
+    --material: var(--p-dark-material);
+    --material-strong: var(--p-dark-material-strong);
+    --separator: var(--p-dark-separator);
+    --label: var(--p-dark-label);
+    --label-2: var(--p-dark-label-2);
+    --label-3: var(--p-dark-label-3);
+    --fill: var(--p-dark-fill);
+    --fill-2: var(--p-dark-fill-2);
+    --accent: var(--p-dark-accent);
+    --positive: var(--p-dark-positive);
+    --warning: var(--p-dark-warning);
+    --critical: var(--p-dark-critical);
+    --highlight: var(--p-dark-highlight);
+    --thumb: var(--p-dark-thumb);
+    --scrim: var(--p-dark-scrim);
+    --shadow-1: var(--p-dark-shadow-1);
+    --shadow-2: var(--p-dark-shadow-2);
+    --thumb-shadow: var(--p-dark-thumb-shadow);
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: var(--p-dark-bg);
+  --material: var(--p-dark-material);
+  --material-strong: var(--p-dark-material-strong);
+  --separator: var(--p-dark-separator);
+  --label: var(--p-dark-label);
+  --label-2: var(--p-dark-label-2);
+  --label-3: var(--p-dark-label-3);
+  --fill: var(--p-dark-fill);
+  --fill-2: var(--p-dark-fill-2);
+  --accent: var(--p-dark-accent);
+  --positive: var(--p-dark-positive);
+  --warning: var(--p-dark-warning);
+  --critical: var(--p-dark-critical);
+  --highlight: var(--p-dark-highlight);
+  --thumb: var(--p-dark-thumb);
+  --scrim: var(--p-dark-scrim);
+  --shadow-1: var(--p-dark-shadow-1);
+  --shadow-2: var(--p-dark-shadow-2);
+  --thumb-shadow: var(--p-dark-thumb-shadow);
+}
+
+/* -------------------------------------------------------------------- */
+/* Grundlayout                                                           */
+/* -------------------------------------------------------------------- */
 
 html,
 body,
 #root {
   height: 100%;
   margin: 0;
-  background: #03060f;
+  background: #000000;
 }
 
 body {
   -webkit-tap-highlight-color: transparent;
   touch-action: none;
   overscroll-behavior: none;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
+  /* Ziffern in Tabellen und Telemetrie laufen sonst bei jedem Wechsel um. */
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--label);
 }
 
-/* Astronomischer Nachtmodus: entfernt Blau-/Grünanteile aus UI *und* WebGL-Canvas. */
-.night-vision {
-  filter: grayscale(1) sepia(1) hue-rotate(-38deg) saturate(7) brightness(0.72) contrast(1.15);
+/* -------------------------------------------------------------------- */
+/* Materialien                                                           */
+/* -------------------------------------------------------------------- */
+
+.material,
+.material-strong {
+  border: 1px solid var(--separator);
+  box-shadow: var(--shadow-1);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
 }
 
-.hud-panel {
-  background: color-mix(in oklab, #04080f 78%, transparent);
-  border: 1px solid color-mix(in oklab, #38bdf8 32%, transparent);
-  box-shadow:
-    0 0 0 1px color-mix(in oklab, #000 40%, transparent),
-    0 0 26px color-mix(in oklab, #0ea5e9 14%, transparent);
-  backdrop-filter: blur(10px);
+.material {
+  background: var(--material);
 }
 
-.hud-scan::before {
-  content: '';
+.material-strong {
+  background: var(--material-strong);
+  box-shadow: var(--shadow-2);
+}
+
+/* Auf Retina-Displays entspricht eine echte Haarlinie einem halben Pixel. */
+@media (min-resolution: 2dppx) {
+  .material,
+  .material-strong,
+  .hairline-t,
+  .hairline-b,
+  .hairline-l {
+    border-width: 0.5px;
+  }
+}
+
+.hairline-t {
+  border-top: 1px solid var(--separator);
+}
+.hairline-b {
+  border-bottom: 1px solid var(--separator);
+}
+.hairline-l {
+  border-left: 1px solid var(--separator);
+}
+
+/* -------------------------------------------------------------------- */
+/* Steuerelemente                                                        */
+/* -------------------------------------------------------------------- */
+
+/* Runde Icon-Schaltfläche – immer mindestens 44 × 44 pt groß. */
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  border-radius: var(--radius-md);
+  color: var(--label);
+  background: transparent;
+  transition:
+    background-color var(--t-fast) var(--ease-standard),
+    color var(--t-fast) var(--ease-standard),
+    transform var(--t-fast) var(--ease-spring);
+}
+
+.icon-button:hover {
+  background: var(--fill);
+}
+
+.icon-button:active {
+  transform: scale(0.92);
+}
+
+.icon-button[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+/* Segmentierter Umschalter im iOS-Stil: eine Spur, ein gleitender Daumen. */
+.segmented {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--fill);
+  isolation: isolate;
+}
+
+.segmented-thumb {
   position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: repeating-linear-gradient(
-    to bottom,
-    rgb(255 255 255 / 0.035) 0px,
-    rgb(255 255 255 / 0.035) 1px,
-    transparent 1px,
-    transparent 3px
-  );
+  top: 2px;
+  bottom: 2px;
+  z-index: 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: var(--thumb);
+  box-shadow: var(--thumb-shadow);
+  transition:
+    transform var(--t-base) var(--ease-spring),
+    width var(--t-base) var(--ease-spring);
+}
+
+.segment {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: calc(var(--radius-sm) - 2px);
+  font-size: 13px;
+  font-weight: 590;
+  letter-spacing: -0.01em;
+  color: var(--label-2);
+  transition:
+    color var(--t-base) var(--ease-standard),
+    transform var(--t-fast) var(--ease-spring);
+}
+
+.segment[aria-pressed='true'] {
+  color: var(--label);
+}
+
+.segment:active {
+  transform: scale(0.96);
+}
+
+/* Kapsel-Filter. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: var(--fill);
+  color: var(--label-2);
+  font-size: 12.5px;
+  font-weight: 560;
+  transition:
+    background-color var(--t-fast) var(--ease-standard),
+    color var(--t-fast) var(--ease-standard),
+    transform var(--t-fast) var(--ease-spring);
+}
+
+.pill:active {
+  transform: scale(0.96);
+}
+
+.pill[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent);
+}
+
+/* Eingabefeld im Stil der iOS-Suchleiste. */
+.field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  background: var(--fill);
+  color: var(--label);
+}
+
+.field input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: inherit;
+  font-size: 15px;
+}
+
+.field input::placeholder {
+  color: var(--label-3);
+}
+
+/* Zeile einer Liste – Trenner rückt wie in iOS hinter den Inhaltsanfang. */
+.row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  text-align: left;
+  transition: background-color var(--t-fast) var(--ease-standard);
+}
+
+.row:hover {
+  background: var(--fill);
+}
+
+.row:active {
+  background: var(--fill-2);
+}
+
+/* -------------------------------------------------------------------- */
+/* Zugänglichkeit                                                        */
+/* -------------------------------------------------------------------- */
+
+:where(button, [role='button'], a, input, select, textarea):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .no-scrollbar::-webkit-scrollbar {
@@ -64,15 +420,33 @@ body {
   scrollbar-width: none;
 }
 
-@keyframes hud-pulse {
+@keyframes soft-pulse {
   0%,
   100% {
-    opacity: 0.35;
+    opacity: 0.4;
   }
   50% {
     opacity: 1;
   }
 }
-.animate-hud-pulse {
-  animation: hud-pulse 1.8s ease-in-out infinite;
+
+.animate-soft-pulse {
+  animation: soft-pulse 1.8s var(--ease-standard) infinite;
+}
+
+/* Astronomischer Nachtmodus: entfernt Blau-/Grünanteile aus UI *und* WebGL-Canvas. */
+.night-vision {
+  filter: grayscale(1) sepia(1) hue-rotate(-38deg) saturate(7) brightness(0.72) contrast(1.15);
+}
+
+/* Bewegung reduzieren: Übergänge fallen weg, Zustände bleiben erhalten. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

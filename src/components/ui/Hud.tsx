@@ -11,14 +11,20 @@ export function Hud(): React.JSX.Element {
 
       <div
         className="absolute bottom-0 left-0 z-20 p-3"
-        style={{ paddingBottom: 'calc(var(--safe-bottom) + 0.75rem)' }}
+        style={{
+          paddingBottom: 'calc(var(--safe-bottom) + 0.75rem)',
+          paddingLeft: 'calc(var(--safe-left) + 0.75rem)',
+        }}
       >
         <RadarMap />
       </div>
 
       <div
         className="absolute bottom-0 right-0 z-20 flex justify-end p-3"
-        style={{ paddingBottom: 'calc(var(--safe-bottom) + 0.75rem)' }}
+        style={{
+          paddingBottom: 'calc(var(--safe-bottom) + 0.75rem)',
+          paddingRight: 'calc(var(--safe-right) + 0.75rem)',
+        }}
       >
         <TelemetryPanel />
       </div>

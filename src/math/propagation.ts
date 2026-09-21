@@ -1,5 +1,6 @@
 import {
   propagate,
+  sgp4,
   gstime,
   eciToEcf,
   ecfToEci,
@@ -11,7 +12,7 @@ import {
 } from 'satellite.js';
 import type { SatRec } from 'satellite.js';
 import type { Ephemeris, ObserverGd, PassPrediction, Vec3 } from '../types';
-import { RAD, normalizeAngle } from './coords';
+import { EARTH_RADIUS_KM, RAD, normalizeAngle } from './coords';
 import { isEclipsed, sunEciUnitVector } from './sun';
 import {
   INVISIBLE_MAGNITUDE,
@@ -360,4 +361,195 @@ export function predictPasses(
   }
 
   return passes;
+}
+
+/* ------------------------------------------------------------------ */
+/* Schneller Pfad für die Renderschleife                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Der Massen-Tick propagiert je Frame den gesamten Katalog. `propagateEphemeris`
+ * wäre dafür zu teuer: Es ruft `gstime()` pro Satellit auf (identisch für alle),
+ * lässt satellite.js das Julianische Datum pro Satellit neu bestimmen und legt
+ * pro Aufruf vier Zwischenobjekte an.
+ *
+ * Die Funktionen unten ziehen alles Zeit- und Ortsabhängige aus der Schleife
+ * heraus und schreiben direkt in den Telemetrie-Buffer – kein einziges
+ * Objekt pro Satellit. Die Formeln sind identisch zu `eciToEcf`,
+ * `ecfToLookAngles` und `eciToGeodetic` aus satellite.js; `scripts/verify-fastpath.mjs`
+ * prüft die Gleichheit numerisch gegen die Bibliothek.
+ */
+
+const WGS84_A = 6378.137;
+const WGS84_B = 6356.7523142;
+const WGS84_F = (WGS84_A - WGS84_B) / WGS84_A;
+const WGS84_E2 = 2 * WGS84_F - WGS84_F * WGS84_F;
+const MINUTES_PER_DAY = 1440;
+const TAU = Math.PI * 2;
+
+/** Vorberechnete, nur vom Standort abhängige Größen. */
+export interface ObserverFrame {
+  ecfX: number;
+  ecfY: number;
+  ecfZ: number;
+  sinLat: number;
+  cosLat: number;
+  sinLon: number;
+  cosLon: number;
+}
+
+export function buildObserverFrame(observer: ObserverGd): ObserverFrame {
+  const sinLat = Math.sin(observer.latitude);
+  const cosLat = Math.cos(observer.latitude);
+  const sinLon = Math.sin(observer.longitude);
+  const cosLon = Math.cos(observer.longitude);
+  const normal = WGS84_A / Math.sqrt(1 - WGS84_E2 * sinLat * sinLat);
+  return {
+    ecfX: (normal + observer.height) * cosLat * cosLon,
+    ecfY: (normal + observer.height) * cosLat * sinLon,
+    ecfZ: (normal * (1 - WGS84_E2) + observer.height) * sinLat,
+    sinLat,
+    cosLat,
+    sinLon,
+    cosLon,
+  };
+}
+
+/** Julianisches Datum (UTC) – identisch zu `jday()` aus satellite.js. */
+export function julianDayFor(date: Date): number {
+  return date.getTime() / 86400000 + 2440587.5;
+}
+
+/** Nur vom Zeitpunkt abhängige Größen eines Ticks. */
+export interface TickFrame {
+  julianDay: number;
+  sinGmst: number;
+  cosGmst: number;
+  gmst: number;
+  sunUnit: Vec3;
+  observerEci: Vec3;
+}
+
+export function buildTickFrame(date: Date, observer: ObserverGd): TickFrame {
+  const gmst = gstime(date);
+  return {
+    julianDay: julianDayFor(date),
+    sinGmst: Math.sin(gmst),
+    cosGmst: Math.cos(gmst),
+    gmst,
+    sunUnit: sunEciUnitVector(date),
+    observerEci: observerEciPosition(observer, date),
+  };
+}
+
+/**
+ * Propagiert einen Satelliten und schreibt Azimut, Elevation, Distanz, Bahnhöhe,
+ * Geschwindigkeit, Schattenflag, Subpunkt und Helligkeit ab `base` in `out`.
+ * Gibt `false` zurück, wenn der Propagator divergiert.
+ *
+ * Die Feldreihenfolge entspricht `math/telemetryLayout.ts`; sie wird hier
+ * bewusst über Offsets adressiert, damit der Aufrufer keinen Umweg über ein
+ * Zwischenobjekt nehmen muss.
+ */
+export function propagateInto(
+  satrec: SatRec,
+  frame: ObserverFrame,
+  tick: TickFrame,
+  standardMagnitude: number,
+  out: Float32Array,
+  base: number,
+  offsets: {
+    az: number;
+    el: number;
+    range: number;
+    alt: number;
+    speed: number;
+    eclipsed: number;
+    lat: number;
+    lon: number;
+    mag: number;
+  },
+): boolean {
+  let pv: RawPv;
+  try {
+    pv = sgp4(satrec, (tick.julianDay - satrec.jdsatepoch) * MINUTES_PER_DAY) as unknown as RawPv;
+  } catch {
+    return false;
+  }
+
+  const p = pv.position;
+  if (!p || typeof p !== 'object' || !Number.isFinite(p.x)) return false;
+  const v = pv.velocity;
+
+  /* --- ECI -> ECF (Rotation um die Polachse) --- */
+  const ecfX = p.x * tick.cosGmst + p.y * tick.sinGmst;
+  const ecfY = -p.x * tick.sinGmst + p.y * tick.cosGmst;
+  const ecfZ = p.z;
+
+  /* --- topozentrische Blickwinkel --- */
+  const rx = ecfX - frame.ecfX;
+  const ry = ecfY - frame.ecfY;
+  const rz = ecfZ - frame.ecfZ;
+
+  const topS = frame.sinLat * frame.cosLon * rx + frame.sinLat * frame.sinLon * ry - frame.cosLat * rz;
+  const topE = -frame.sinLon * rx + frame.cosLon * ry;
+  const topZ = frame.cosLat * frame.cosLon * rx + frame.cosLat * frame.sinLon * ry + frame.sinLat * rz;
+
+  const rangeKm = Math.sqrt(topS * topS + topE * topE + topZ * topZ);
+  if (!(rangeKm > 0)) return false;
+
+  const elevation = Math.asin(topZ / rangeKm);
+  let azimuth = Math.atan2(-topE, topS) + Math.PI;
+  azimuth = ((azimuth % TAU) + TAU) % TAU;
+
+  /* --- Subpunkt (iterativ, bricht ab sobald konvergiert) --- */
+  const R = Math.hypot(p.x, p.y);
+  let longitude = Math.atan2(p.y, p.x) - tick.gmst;
+  longitude = ((((longitude + Math.PI) % TAU) + TAU) % TAU) - Math.PI;
+
+  let latitude = Math.atan2(p.z, R);
+  let C = 1;
+  for (let i = 0; i < 20; i += 1) {
+    const sinLat = Math.sin(latitude);
+    C = 1 / Math.sqrt(1 - WGS84_E2 * sinLat * sinLat);
+    const next = Math.atan2(p.z + WGS84_A * C * WGS84_E2 * sinLat, R);
+    const converged = Math.abs(next - latitude) < 1e-13;
+    latitude = next;
+    if (converged) break;
+  }
+  const heightKm = R / Math.cos(latitude) - WGS84_A * C;
+
+  /* --- Beleuchtung --- */
+  const sun = tick.sunUnit;
+  const dot = p.x * sun.x + p.y * sun.y + p.z * sun.z;
+  let eclipsed = false;
+  if (dot <= 0) {
+    const ax = p.x - dot * sun.x;
+    const ay = p.y - dot * sun.y;
+    const az = p.z - dot * sun.z;
+    eclipsed = Math.hypot(ax, ay, az) < EARTH_RADIUS_KM;
+  }
+
+  let magnitude = INVISIBLE_MAGNITUDE;
+  if (!eclipsed) {
+    const ox = tick.observerEci.x - p.x;
+    const oy = tick.observerEci.y - p.y;
+    const oz = tick.observerEci.z - p.z;
+    const length = Math.hypot(ox, oy, oz) || 1;
+    let cosPhase = (ox * sun.x + oy * sun.y + oz * sun.z) / length;
+    cosPhase = cosPhase > 1 ? 1 : cosPhase < -1 ? -1 : cosPhase;
+    magnitude = apparentMagnitude(standardMagnitude, rangeKm, Math.acos(cosPhase), elevation);
+  }
+
+  out[base + offsets.az] = azimuth;
+  out[base + offsets.el] = elevation;
+  out[base + offsets.range] = rangeKm;
+  out[base + offsets.alt] = heightKm;
+  out[base + offsets.speed] =
+    v && typeof v === 'object' ? Math.hypot(v.x, v.y, v.z) : 0;
+  out[base + offsets.eclipsed] = eclipsed ? 1 : 0;
+  out[base + offsets.lat] = latitude * RAD;
+  out[base + offsets.lon] = longitude * RAD;
+  out[base + offsets.mag] = magnitude;
+  return true;
 }

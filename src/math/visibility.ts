@@ -20,6 +20,9 @@ const STANDARD_MAGNITUDE_BY_GROUP: Record<SatelliteGroup, number> = {
   brightest: 2.6,
   weather: 4.2,
   starlink: 5.5,
+  // Der Gesamtkatalog besteht überwiegend aus Kleinsatelliten, Oberstufen und
+  // Nutzlastverkleidungen – im Mittel deutlich unter der Sichtbarkeitsgrenze.
+  other: 5.5,
 };
 
 export function standardMagnitudeFor(noradId: string, group: SatelliteGroup): number {

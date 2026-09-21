@@ -22,19 +22,55 @@ import {
  */
 
 export interface TelemetryStore {
+  /** Anzahl belegter Telemetrie-Plätze (= Katalogumfang). */
   count: number;
+  /** Kapazität des Buffers in Objekten; wächst in Blöcken mit dem Katalog. */
+  capacity: number;
   data: Float32Array;
   timeMs: number;
-  /** Monoton steigend – Overlays erkennen daran neue Daten. */
+  /**
+   * Monoton steigend – Overlays erkennen daran neue Daten. Der Zähler springt
+   * erst weiter, wenn *alle* Shards des Worker-Pools geliefert haben, sodass
+   * ein Tick immer einen vollständigen Himmel beschreibt.
+   */
   revision: number;
+  /** Gemessener Abstand zweier vollständiger Ticks – Basis der Interpolation. */
+  intervalMs: number;
+  /** Summierte Rechenzeit aller Shards im letzten Tick (Diagnose). */
+  computeMs: number;
 }
 
 export const telemetry: TelemetryStore = {
   count: 0,
+  capacity: 0,
   data: new Float32Array(0),
   timeMs: Date.now(),
   revision: 0,
+  intervalMs: 100,
+  computeMs: 0,
 };
+
+/** Blockgröße, in der der Telemetrie-Buffer wächst – hält Reallokationen selten. */
+const CAPACITY_CHUNK = 2048;
+
+/**
+ * Stellt sicher, dass mindestens `count` Objekte Platz haben. Vorhandene Werte
+ * bleiben erhalten, damit ein wachsender Katalog keinen Frame mit leerem
+ * Himmel erzeugt.
+ */
+export function ensureTelemetryCapacity(count: number): void {
+  if (count <= telemetry.capacity) return;
+  const capacity = Math.ceil(count / CAPACITY_CHUNK) * CAPACITY_CHUNK;
+  const next = new Float32Array(capacity * TELEMETRY_STRIDE);
+  next.set(telemetry.data);
+  // Neue Plätze gelten bis zum ersten Tick als „unter dem Horizont“.
+  for (let i = telemetry.capacity; i < capacity; i += 1) {
+    next[i * TELEMETRY_STRIDE + T_EL] = -Math.PI / 2;
+    next[i * TELEMETRY_STRIDE + T_RANGE] = Number.NaN;
+  }
+  telemetry.data = next;
+  telemetry.capacity = capacity;
+}
 
 export interface SatelliteSample {
   azimuth: number;
@@ -68,6 +104,27 @@ export function readSample(index: number, out?: SatelliteSample): SatelliteSampl
   target.magnitude = d[base + T_MAG];
   return target;
 }
+
+/**
+ * Gruppenzuordnung als typisiertes Array, einmal je Katalogfassung berechnet.
+ *
+ * Radar, 3D-Feld, Spuren und Picking brauchen dieselbe Information pro Frame.
+ * Sie hier zu halten spart drei identische `useMemo`-Kopien und vor allem die
+ * String-Vergleiche (`sat.group === 'starlink'`) in den Schleifen.
+ */
+export const catalogIndex: {
+  groupIds: Uint8Array;
+  /** 1 = Starlink; vorberechnet, weil der Starlink-Filter pro Objekt greift. */
+  starlink: Uint8Array;
+  /** 1 = prominentes Objekt. */
+  highlight: Uint8Array;
+  version: number;
+} = {
+  groupIds: new Uint8Array(0),
+  starlink: new Uint8Array(0),
+  highlight: new Uint8Array(0),
+  version: 0,
+};
 
 export interface ViewState {
   /** Aktuelle Kamera-Orientierung (wird vom CameraRig jeden Frame gespiegelt). */
@@ -118,4 +175,19 @@ export const trailState: { index: number; points: Float32Array | null; version: 
 
 export function requestFocus(azimuth: number, elevation: number): void {
   viewState.focus = { azimuth, elevation, startedAt: performance.now() };
+}
+
+/**
+ * Diagnosefenster für die Entwicklung.
+ *
+ * Telemetrie und Katalogindex liegen bewusst außerhalb von React und sind
+ * damit aus der Konsole (und aus Browser-Tests) sonst nicht erreichbar. Im
+ * Produktions-Build fällt der Block weg.
+ */
+if (import.meta.env?.DEV) {
+  (globalThis as unknown as { __orbitalAtlas?: unknown }).__orbitalAtlas = {
+    telemetry,
+    catalogIndex,
+    readSample,
+  };
 }

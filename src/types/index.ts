@@ -51,7 +51,12 @@ export interface Ephemeris extends LookAngles {
   magnitude: number;
 }
 
-export type SatelliteGroup = 'stations' | 'brightest' | 'starlink' | 'weather';
+/**
+ * Katalogklassen. `other` ist die Sammelklasse des Gesamtkatalogs
+ * (CelesTrak `GROUP=active`) – alles, was nicht schon durch eine der
+ * spezifischeren Gruppen abgedeckt ist.
+ */
+export type SatelliteGroup = 'stations' | 'brightest' | 'weather' | 'starlink' | 'other';
 
 /** Statische Katalogdaten eines Satelliten (React-State-tauglich, ändert sich selten). */
 export interface SatelliteMeta {
@@ -120,7 +125,7 @@ export type CompassStatus = 'unknown' | 'ok' | 'calibrating' | 'relative';
 
 /**
  * Darstellungsmodus des Himmels:
- * - `all`      – jedes Katalogobjekt über dem Horizont
+ * - `all`      – **jedes** Katalogobjekt über dem Horizont, ohne jede Obergrenze
  * - `nakedEye` – nur, was realistisch mit bloßem Auge zu sehen ist
  * - `starlink` – ausschließlich Starlink
  */
@@ -134,23 +139,56 @@ export interface CatalogFilters {
   query: string;
 }
 
+/** Farbschema der Oberfläche. `system` folgt `prefers-color-scheme`. */
+export type ThemePreference = 'system' | 'light' | 'dark';
+
 /* ------------------------------------------------------------------ */
 /* Worker-Protokoll                                                     */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Virtuelle Zeit als reine Funktion der Wanduhr:
+ * `virtual(now) = originVirtualMs + (now - originRealMs) * scale`.
+ *
+ * Damit berechnen alle Worker des Pools garantiert dieselbe Epoche – ohne
+ * inkrementelle Akkumulation, die zwischen den Threads auseinanderliefe.
+ */
+export interface TimeBase {
+  originRealMs: number;
+  originVirtualMs: number;
+  scale: number;
+}
+
 export type WorkerRequest =
+  | { type: 'init'; shardIndex: number; shardCount: number }
   | { type: 'load'; groups: SatelliteGroup[] }
   | { type: 'observer'; observer: GeoCoord }
   | { type: 'start'; intervalMs: number }
   | { type: 'stop' }
-  | { type: 'timeScale'; value: number }
+  | { type: 'time'; base: TimeBase }
+  | { type: 'recycle'; buffer: ArrayBuffer }
+  /** Rohtext einer Gruppe, vom Lader-Shard über den Main-Thread verteilt. */
+  | { type: 'tle'; group: SatelliteGroup; text: string }
   | { type: 'trail'; index: number; fromMin: number; toMin: number; samples: number }
   | { type: 'pass'; index: number; searchHours: number };
 
 export type WorkerResponse =
-  | { type: 'catalog'; catalog: SatelliteMeta[] }
-  | { type: 'tick'; time: number; count: number; buffer: ArrayBuffer }
+  /** Metadaten des eigenen Shards; `total` ist die Größe des Gesamtkatalogs. */
+  | { type: 'catalog'; shardIndex: number; offset: number; total: number; catalog: SatelliteMeta[] }
+  /** Telemetrie des eigenen Shards. `offset` ist der globale Startindex. */
+  | {
+      type: 'tick';
+      shardIndex: number;
+      offset: number;
+      count: number;
+      time: number;
+      /** Gemessene Rechenzeit des Ticks in ms – speist die adaptive Taktung. */
+      durationMs: number;
+      buffer: ArrayBuffer;
+    }
   | { type: 'trail'; index: number; points: Float32Array }
   | { type: 'pass'; index: number; passes: PassPrediction[] }
+  /** Rohtext, den der Lader-Shard an seine Geschwister weiterreichen lässt. */
+  | { type: 'tle'; group: SatelliteGroup; text: string }
   | { type: 'status'; message: string; loading: boolean }
   | { type: 'error'; message: string };

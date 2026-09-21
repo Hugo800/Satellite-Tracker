@@ -1,14 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import {
-  ChevronDown,
-  ChevronUp,
-  Crosshair,
-  Eye,
-  EyeOff,
-  Radio,
-  Timer,
-  X,
-} from 'lucide-react';
+import { ChevronDown, ChevronUp, Crosshair, Eye, EyeOff, Radio, Timer, X } from 'lucide-react';
 import { RAD, compassLabel } from '../../math/coords';
 import { readSample, requestFocus } from '../../state/runtime';
 import { useAppStore } from '../../state/store';
@@ -21,24 +12,28 @@ import {
 } from '../../utils/format';
 import type { PassPrediction } from '../../types';
 
-interface LiveFieldProps {
-  label: string;
-  unit: string;
-}
-
 function LiveField({
   label,
   unit,
   valueRef,
-}: LiveFieldProps & { valueRef: (node: HTMLSpanElement | null) => void }): React.JSX.Element {
+}: {
+  label: string;
+  unit: string;
+  valueRef: (node: HTMLSpanElement | null) => void;
+}): React.JSX.Element {
   return (
-    <div className="rounded-md border border-sky-400/15 bg-sky-950/30 px-2 py-1.5">
-      <div className="text-[9px] uppercase tracking-[0.16em] text-sky-300/60">{label}</div>
-      <div className="flex items-baseline gap-1">
-        <span ref={valueRef} className="text-base font-semibold text-sky-100 tabular-nums">
+    <div
+      className="rounded-[var(--radius-sm)] px-2.5 py-2"
+      style={{ background: 'var(--fill)' }}
+    >
+      <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-label-3">
+        {label}
+      </div>
+      <div className="mt-0.5 flex items-baseline gap-1">
+        <span ref={valueRef} className="text-[17px] font-semibold tracking-[-0.02em] text-label">
           –
         </span>
-        <span className="text-[10px] text-sky-300/60">{unit}</span>
+        {unit && <span className="text-[11px] text-label-2">{unit}</span>}
       </div>
     </div>
   );
@@ -57,25 +52,29 @@ function PassRow({ pass }: { pass: PassPrediction }): React.JSX.Element {
   const seconds = sunlit ? pass.sunlitSec : pass.durationSec;
 
   const badge = !sunlit
-    ? { text: 'Erdschatten', className: 'bg-slate-700/40 text-slate-300' }
+    ? { text: 'Erdschatten', color: 'var(--label-2)' }
     : pass.nakedEye
-      ? { text: 'bloßes Auge', className: 'bg-amber-400/20 text-amber-200' }
-      : { text: 'nur optisch', className: 'bg-sky-400/15 text-sky-300' };
+      ? { text: 'bloßes Auge', color: 'var(--highlight)' }
+      : { text: 'nur optisch', color: 'var(--accent)' };
 
   return (
-    <li className="rounded-md border border-sky-400/15 bg-sky-950/30 px-2 py-1.5">
+    <li className="rounded-[var(--radius-sm)] px-2.5 py-2" style={{ background: 'var(--fill)' }}>
       <div className="flex items-baseline gap-1.5">
-        <span className="text-[10px] text-sky-300/60">{formatDay(startMs)}</span>
-        <span className="text-xs font-semibold tabular-nums text-sky-100">
+        <span className="text-[11px] text-label-2">{formatDay(startMs)}</span>
+        <span className="text-[13px] font-semibold text-label">
           {formatClockShort(startMs)} – {formatClockShort(endMs)}
         </span>
         <span
-          className={`ml-auto rounded px-1.5 py-0.5 text-[9px] font-semibold ${badge.className}`}
+          className="ml-auto rounded-full px-2 py-0.5 text-[10px] font-semibold"
+          style={{
+            color: badge.color,
+            background: `color-mix(in srgb, ${badge.color} 16%, transparent)`,
+          }}
         >
           {badge.text}
         </span>
       </div>
-      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[10px] text-sky-300/70 tabular-nums">
+      <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-label-2">
         <span>{formatDurationSec(seconds)}</span>
         <span>· max. {formatNumber(pass.maxElevationDeg, 0)}°</span>
         <span>
@@ -83,7 +82,7 @@ function PassRow({ pass }: { pass: PassPrediction }): React.JSX.Element {
           {formatNumber(pass.losAzimuthDeg, 0)}° {compassLabel(pass.losAzimuthDeg)}
         </span>
         {sunlit && (
-          <span className={pass.nakedEye ? 'text-amber-300' : ''}>
+          <span style={pass.nakedEye ? { color: 'var(--highlight)' } : undefined}>
             · {formatNumber(pass.peakMagnitude, 1)} mag ·{' '}
             {formatNumber(pass.illumination * 100, 0)} % beleuchtet
           </span>
@@ -94,7 +93,7 @@ function PassRow({ pass }: { pass: PassPrediction }): React.JSX.Element {
 }
 
 /**
- * Sci-Fi-HUD mit Live-Telemetrie des selektierten Objekts.
+ * Informationskarte des selektierten Objekts.
  *
  * Die Zahlenwerte werden per rAF direkt in die DOM-Knoten geschrieben –
  * dadurch bleibt der React-Baum bei 10 Hz Telemetrie komplett re-render-frei.
@@ -143,9 +142,7 @@ export function TelemetryPanel(): React.JSX.Element | null {
       }
       if (lightRef.current) {
         lightRef.current.textContent = sample.eclipsed ? 'Erdschatten' : 'Sonnenbeschienen';
-        lightRef.current.className = sample.eclipsed
-          ? 'text-[11px] font-semibold text-slate-400'
-          : 'text-[11px] font-semibold text-amber-300';
+        lightRef.current.style.color = sample.eclipsed ? 'var(--label-2)' : 'var(--highlight)';
       }
     };
 
@@ -170,44 +167,49 @@ export function TelemetryPanel(): React.JSX.Element | null {
   const meta = catalogByIndex.get(selectedIndex);
 
   return (
-    <div className="hud-panel hud-scan pointer-events-auto relative w-[min(92vw,22rem)] overflow-hidden rounded-xl">
-      <div className="flex items-center gap-2 border-b border-sky-400/20 px-3 py-2">
-        <Radio size={14} className="text-sky-300 animate-hud-pulse" />
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold tracking-wide text-sky-100">
+    <div className="material pointer-events-auto w-[min(92vw,22.5rem)] overflow-hidden rounded-[var(--radius-md)]">
+      <div className="hairline-b flex items-center gap-1 px-3 py-2">
+        <Radio size={15} strokeWidth={2.2} className="animate-soft-pulse text-accent" aria-hidden />
+        <div className="ml-1 min-w-0 flex-1">
+          <div className="truncate text-[15px] font-semibold tracking-[-0.01em] text-label">
             {meta?.name ?? `Objekt #${selectedIndex}`}
           </div>
-          <div className="truncate text-[10px] uppercase tracking-[0.18em] text-sky-300/60">
-            NORAD {meta?.noradId ?? '—'} · {formatNumber(meta?.periodMin ?? 0, 1)} min Periode ·{' '}
-            {formatNumber(meta?.inclinationDeg ?? 0, 1)}° Inklination
+          <div className="truncate text-[11px] text-label-2">
+            NORAD {meta?.noradId ?? '—'} · {formatNumber(meta?.periodMin ?? 0, 1)} min ·{' '}
+            {formatNumber(meta?.inclinationDeg ?? 0, 1)}° Inkl.
           </div>
         </div>
         <button
           type="button"
-          aria-label="Kamera ausrichten"
-          className="rounded p-1 text-sky-300 transition hover:bg-sky-400/15"
+          aria-label="Kamera auf Objekt ausrichten"
+          className="icon-button"
           onClick={() => {
             const sample = readSample(selectedIndex);
             if (sample) requestFocus(sample.azimuth, sample.elevation);
           }}
         >
-          <Crosshair size={16} />
+          <Crosshair size={18} strokeWidth={2} aria-hidden />
         </button>
         <button
           type="button"
           aria-label={expanded ? 'Einklappen' : 'Ausklappen'}
-          className="rounded p-1 text-sky-300 transition hover:bg-sky-400/15"
+          aria-expanded={expanded}
+          className="icon-button"
           onClick={() => setExpanded((v) => !v)}
         >
-          {expanded ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+          {expanded ? (
+            <ChevronDown size={18} strokeWidth={2} aria-hidden />
+          ) : (
+            <ChevronUp size={18} strokeWidth={2} aria-hidden />
+          )}
         </button>
         <button
           type="button"
           aria-label="Auswahl aufheben"
-          className="rounded p-1 text-sky-300 transition hover:bg-sky-400/15"
+          className="icon-button"
           onClick={() => select(null)}
         >
-          <X size={16} />
+          <X size={18} strokeWidth={2} aria-hidden />
         </button>
       </div>
 
@@ -258,34 +260,42 @@ export function TelemetryPanel(): React.JSX.Element | null {
             />
           </div>
 
-          <div className="flex items-center gap-2 rounded-md border border-sky-400/15 bg-sky-950/30 px-2 py-1.5">
+          <div
+            className="flex items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-2"
+            style={{ background: 'var(--fill)' }}
+          >
             {/* Beleuchtungsstatus entscheidet, ob das Objekt am Nachthimmel sichtbar ist. */}
-            <Eye size={13} className="text-amber-300" />
-            <span ref={lightRef} className="text-[11px] font-semibold text-amber-300">
+            <Eye size={14} strokeWidth={2.2} style={{ color: 'var(--highlight)' }} aria-hidden />
+            <span ref={lightRef} className="text-[12.5px] font-semibold">
               –
             </span>
           </div>
 
-          <div className="rounded-md border border-sky-400/15 bg-sky-950/30 px-2 py-2">
-            <div className="mb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-[0.16em] text-sky-300/60">
-              <Timer size={12} /> Überflüge · nächste 48 h
+          <div
+            className="rounded-[var(--radius-sm)] px-2.5 py-2"
+            style={{ background: 'var(--fill)' }}
+          >
+            <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-label-3">
+              <Timer size={12} strokeWidth={2.2} aria-hidden /> Überflüge · nächste 48 h
               {passes.length > 0 && (
-                <span className="ml-auto normal-case tracking-normal text-sky-200">
+                <span className="ml-auto text-[11px] font-medium normal-case tracking-normal text-accent">
                   <span ref={countdownRef}>–</span>
                 </span>
               )}
             </div>
 
-            {passPending && <div className="text-xs text-sky-300/70">Berechne Ephemeriden …</div>}
+            {passPending && (
+              <div className="text-[12.5px] text-label-2">Berechne Ephemeriden …</div>
+            )}
 
             {!passPending && passes.length === 0 && (
-              <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                <EyeOff size={12} /> Kein Überflug in den nächsten 48 h
+              <div className="flex items-center gap-1.5 text-[12.5px] text-label-2">
+                <EyeOff size={13} strokeWidth={2.2} aria-hidden /> Kein Überflug in den nächsten 48 h
               </div>
             )}
 
             {!passPending && passes.length > 0 && (
-              <ul className="max-h-56 space-y-1 overflow-y-auto overscroll-contain pr-0.5">
+              <ul className="no-scrollbar max-h-56 space-y-1.5 overflow-y-auto overscroll-contain pr-0.5">
                 {passes.map((p) => (
                   <PassRow key={p.aos} pass={p} />
                 ))}

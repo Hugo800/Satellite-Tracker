@@ -9,6 +9,7 @@ import type {
   SatelliteMeta,
   SkyFilterMode,
   SunState,
+  ThemePreference,
 } from '../types';
 
 export interface AppState {
@@ -34,6 +35,7 @@ export interface AppState {
   compassStatus: CompassStatus;
   nightMode: boolean;
   showTrails: boolean;
+  theme: ThemePreference;
   sun: SunState;
   moon: MoonState;
 
@@ -54,6 +56,7 @@ export interface AppState {
   setCompassStatus: (status: CompassStatus) => void;
   toggleNightMode: () => void;
   toggleTrails: () => void;
+  setTheme: (theme: ThemePreference) => void;
   setSun: (sun: SunState) => void;
   setMoon: (moon: MoonState) => void;
 }
@@ -64,12 +67,26 @@ const DEFAULT_FILTERS: CatalogFilters = {
   query: '',
 };
 
+const THEME_KEY = 'orbital-atlas:theme';
+
+function readStoredTheme(): ThemePreference {
+  try {
+    const value = localStorage.getItem(THEME_KEY);
+    if (value === 'light' || value === 'dark' || value === 'system') return value;
+  } catch {
+    /* Privater Modus o. Ä. – dann gilt schlicht die Systemeinstellung. */
+  }
+  return 'system';
+}
+
 export const useAppStore = create<AppState>((set) => ({
   observer: null,
   geoError: null,
   catalog: [],
   catalogByIndex: new Map(),
-  activeGroups: ['stations', 'brightest', 'weather', 'starlink'],
+  // `other` ist der Gesamtkatalog – er ist von Anfang an aktiv, damit der
+  // Modus „Alle“ wirklich alles zeigt und nicht nur vier Teilgruppen.
+  activeGroups: ['stations', 'brightest', 'weather', 'starlink', 'other'],
   status: 'Initialisiere …',
   loading: true,
   errors: [],
@@ -86,6 +103,7 @@ export const useAppStore = create<AppState>((set) => ({
   compassStatus: 'unknown',
   nightMode: false,
   showTrails: true,
+  theme: readStoredTheme(),
   sun: { altitudeDeg: -18, azimuthDeg: 0 },
   moon: { altitudeDeg: -18, azimuthDeg: 0, illumination: 0.5 },
 
@@ -95,7 +113,10 @@ export const useAppStore = create<AppState>((set) => ({
     set({ catalog, catalogByIndex: new Map(catalog.map((s) => [s.index, s])) }),
   setStatus: (status, loading) => set({ status, loading }),
   pushError: (message) =>
-    set((state) => ({ errors: [...state.errors.slice(-3), message] })),
+    set((state) =>
+      // Dieselbe Meldung kann aus mehreren Shards auflaufen – einmal reicht.
+      state.errors.includes(message) ? state : { errors: [...state.errors.slice(-3), message] },
+    ),
   select: (selectedIndex) =>
     set({ selectedIndex, passes: [], passIndex: null, passPending: selectedIndex !== null }),
   setPasses: (index, passes) =>
@@ -119,6 +140,14 @@ export const useAppStore = create<AppState>((set) => ({
   setCompassStatus: (compassStatus) => set({ compassStatus }),
   toggleNightMode: () => set((state) => ({ nightMode: !state.nightMode })),
   toggleTrails: () => set((state) => ({ showTrails: !state.showTrails })),
+  setTheme: (theme) => {
+    try {
+      localStorage.setItem(THEME_KEY, theme);
+    } catch {
+      /* Ohne Persistenz gilt die Wahl nur für diese Sitzung. */
+    }
+    set({ theme });
+  },
   setSun: (sun) => set({ sun }),
   setMoon: (moon) => set({ moon }),
 }));

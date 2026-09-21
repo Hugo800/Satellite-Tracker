@@ -1,23 +1,19 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { BufferAttribute, BufferGeometry, Color, LineSegments } from 'three';
+import { BufferAttribute, BufferGeometry, Color, DynamicDrawUsage, LineSegments } from 'three';
 import { DEG, angleDelta } from '../../math/coords';
 import { TELEMETRY_STRIDE, T_AZ, T_ECLIPSED, T_EL, T_MAG, T_RANGE } from '../../math/telemetryLayout';
 import { passesSkyFilter } from '../../math/visibility';
-import { telemetry } from '../../state/runtime';
+import { catalogIndex, telemetry } from '../../state/runtime';
 import { useAppStore } from '../../state/store';
-import { GROUP_COLORS, GROUP_ORDER, MAX_INSTANCES, SKY_RADIUS } from './SatelliteField';
+import { GROUP_COLORS, GROUP_ORDER, SKY_RADIUS } from '../../data/groups';
 
 /** Anzahl gespeicherter Stützstellen je Satellit. */
 const HISTORY_LEN = 20;
 /** Abstand der Stützstellen – maximal 20 × 900 ms = 18 s zurückliegende Bahn. */
 const SAMPLE_INTERVAL_MS = 900;
-/**
- * Obergrenze gleichzeitig gezeichneter Spuren. Im Modus „Alle“ können mehrere
- * hundert Objekte über dem Horizont stehen; der Puffer bleibt trotzdem fix.
- */
-const MAX_TRAILS = 900;
-const MAX_VERTICES = MAX_TRAILS * HISTORY_LEN * 2;
+/** Kapazität wächst blockweise mit dem Katalog – es gibt keine feste Obergrenze. */
+const CAPACITY_CHUNK = 2048;
 
 const TRAIL_RADIUS = SKY_RADIUS * 0.995;
 /** Deckkraft am Kopf der Spur; zum Ende läuft sie auf 0 aus. */
@@ -31,8 +27,6 @@ const MAX_SEGMENT_STEP = 0.5;
  * herzieht statt sich über Minuten hinweg über den Bildschirm zu ziehen.
  */
 const MAX_TRAIL_ARC = 4 * DEG;
-
-const STARLINK_GROUP_ID = GROUP_ORDER.indexOf('starlink');
 
 const vertexShader = /* glsl */ `
   attribute vec3 aColor;
@@ -56,12 +50,41 @@ const fragmentShader = /* glsl */ `
   }
 `;
 
+interface TrailBufferSet {
+  capacity: number;
+  histAz: Float32Array;
+  histEl: Float32Array;
+  positions: Float32Array;
+  colors: Float32Array;
+  alphas: Float32Array;
+  tmpAz: Float32Array;
+  tmpEl: Float32Array;
+}
+
+function createBuffers(capacity: number): TrailBufferSet {
+  const vertices = capacity * HISTORY_LEN * 2;
+  return {
+    capacity,
+    histAz: new Float32Array(capacity * HISTORY_LEN),
+    histEl: new Float32Array(capacity * HISTORY_LEN),
+    positions: new Float32Array(vertices * 3),
+    colors: new Float32Array(vertices * 3),
+    alphas: new Float32Array(vertices),
+    // Wiederverwendete Kratzer für die Stützstellen eines einzelnen Satelliten,
+    // um pro Frame keine neuen Arrays zu allozieren.
+    tmpAz: new Float32Array(HISTORY_LEN + 1),
+    tmpEl: new Float32Array(HISTORY_LEN + 1),
+  };
+}
+
 /**
  * Bewegungsspuren: zeigt für jeden dargestellten Satelliten den zuletzt
  * zurückgelegten Bahnabschnitt als ausblendenden Schweif.
  *
- * Alles liegt in vorab allozierten Typed Arrays; pro Telemetrie-Tick wird nur
- * der genutzte Bereich neu befüllt und per `setDrawRange` gezeichnet.
+ * Alles liegt in vorab allozierten Typed Arrays, deren Größe dem Katalog folgt
+ * – eine feste Obergrenze an gleichzeitig gezeichneten Spuren gibt es nicht.
+ * Pro Telemetrie-Tick wird nur der genutzte Bereich neu befüllt, per
+ * `addUpdateRange` hochgeladen und per `setDrawRange` gezeichnet.
  */
 export function SatelliteTrails(): React.JSX.Element | null {
   const lineRef = useRef<LineSegments>(null);
@@ -72,46 +95,34 @@ export function SatelliteTrails(): React.JSX.Element | null {
   const modeRef = useRef(mode);
   modeRef.current = mode;
 
-  const groupIds = useMemo(() => {
-    const ids = new Uint8Array(MAX_INSTANCES);
-    catalog.forEach((sat) => {
-      if (sat.index < MAX_INSTANCES) ids[sat.index] = GROUP_ORDER.indexOf(sat.group);
-    });
-    return ids;
-  }, [catalog]);
-
-  const palette = useMemo(() => GROUP_ORDER.map((g) => new Color(GROUP_COLORS[g])), []);
-
-  const buffers = useMemo(
-    () => ({
-      histAz: new Float32Array(MAX_INSTANCES * HISTORY_LEN),
-      histEl: new Float32Array(MAX_INSTANCES * HISTORY_LEN),
-      positions: new Float32Array(MAX_VERTICES * 3),
-      colors: new Float32Array(MAX_VERTICES * 3),
-      alphas: new Float32Array(MAX_VERTICES),
-      // Wiederverwendete Kratzer für die Stützstellen eines einzelnen Satelliten,
-      // um pro Frame keine neuen Arrays zu allozieren.
-      tmpAz: new Float32Array(HISTORY_LEN + 1),
-      tmpEl: new Float32Array(HISTORY_LEN + 1),
-    }),
-    [],
+  const capacity = Math.max(
+    CAPACITY_CHUNK,
+    Math.ceil(Math.max(catalog.length, telemetry.count) / CAPACITY_CHUNK) * CAPACITY_CHUNK,
   );
+
+  const buffers = useMemo(() => createBuffers(capacity), [capacity]);
+  const palette = useMemo(() => GROUP_ORDER.map((g) => new Color(GROUP_COLORS[g])), []);
 
   const history = useRef({ writeIndex: 0, filled: 0, lastSampleMs: 0, revision: -1 });
 
-  // Nach einem Katalogwechsel zeigen die alten Indizes auf andere Objekte.
+  // Neue Buffer starten leer; erst nach zwei Abtastungen entsteht wieder ein Segment.
   useEffect(() => {
     history.current.filled = 0;
     history.current.writeIndex = 0;
-  }, [catalog]);
+    history.current.revision = -1;
+  }, [buffers]);
 
-  const geometry = useMemo(() => {
+  const { geometry, attributes } = useMemo(() => {
     const geo = new BufferGeometry();
-    geo.setAttribute('position', new BufferAttribute(buffers.positions, 3));
-    geo.setAttribute('aColor', new BufferAttribute(buffers.colors, 3));
-    geo.setAttribute('aAlpha', new BufferAttribute(buffers.alphas, 1));
+    const position = new BufferAttribute(buffers.positions, 3);
+    const color = new BufferAttribute(buffers.colors, 3);
+    const alpha = new BufferAttribute(buffers.alphas, 1);
+    for (const attribute of [position, color, alpha]) attribute.setUsage(DynamicDrawUsage);
+    geo.setAttribute('position', position);
+    geo.setAttribute('aColor', color);
+    geo.setAttribute('aAlpha', alpha);
     geo.setDrawRange(0, 0);
-    return geo;
+    return { geometry: geo, attributes: { position, color, alpha } };
   }, [buffers]);
 
   useEffect(() => () => geometry.dispose(), [geometry]);
@@ -124,7 +135,7 @@ export function SatelliteTrails(): React.JSX.Element | null {
     if (state.revision === telemetry.revision) return;
     state.revision = telemetry.revision;
 
-    const count = Math.min(telemetry.count, MAX_INSTANCES);
+    const count = Math.min(telemetry.count, buffers.capacity);
     if (count === 0) {
       geometry.setDrawRange(0, 0);
       return;
@@ -132,6 +143,7 @@ export function SatelliteTrails(): React.JSX.Element | null {
 
     const data = telemetry.data;
     const now = telemetry.timeMs;
+    const maxVertices = buffers.alphas.length;
 
     if (now - state.lastSampleMs >= SAMPLE_INTERVAL_MS) {
       state.lastSampleMs = now;
@@ -151,23 +163,25 @@ export function SatelliteTrails(): React.JSX.Element | null {
     }
 
     const activeMode = modeRef.current;
+    const groupIds = catalogIndex.groupIds;
+    const starlinkFlags = catalogIndex.starlink;
     let vertex = 0;
 
-    for (let i = 0; i < count && vertex + HISTORY_LEN * 2 <= MAX_VERTICES; i += 1) {
+    for (let i = 0; i < count && vertex + HISTORY_LEN * 2 <= maxVertices; i += 1) {
       const base = i * TELEMETRY_STRIDE;
-      const groupId = groupIds[i];
+      const groupId = groupIds[i] ?? 0;
       const shown =
         Number.isFinite(data[base + T_RANGE]) &&
         passesSkyFilter(
           activeMode,
-          groupId === STARLINK_GROUP_ID,
+          starlinkFlags[i] === 1,
           data[base + T_EL],
           data[base + T_ECLIPSED] > 0.5,
           data[base + T_MAG],
         );
       if (!shown) continue;
 
-      const color = palette[groupId];
+      const color = palette[groupId] ?? palette[0];
       const filled = state.filled;
 
       // Stützstellen einmal in einen Kratzer laden (Ringpuffer + aktuelle Position).
@@ -241,10 +255,16 @@ export function SatelliteTrails(): React.JSX.Element | null {
     }
 
     geometry.setDrawRange(0, vertex);
-    geometry.attributes.position.needsUpdate = true;
-    geometry.attributes.aColor.needsUpdate = true;
-    geometry.attributes.aAlpha.needsUpdate = true;
-    if (vertex > 0) geometry.computeBoundingSphere();
+    if (vertex > 0) {
+      // Nur den beschriebenen Bereich hochladen – bei wenigen Spuren bleibt das
+      // ein Bruchteil des allozierten Buffers.
+      attributes.position.addUpdateRange(0, vertex * 3);
+      attributes.color.addUpdateRange(0, vertex * 3);
+      attributes.alpha.addUpdateRange(0, vertex);
+      attributes.position.needsUpdate = true;
+      attributes.color.needsUpdate = true;
+      attributes.alpha.needsUpdate = true;
+    }
   });
 
   if (!showTrails) return null;

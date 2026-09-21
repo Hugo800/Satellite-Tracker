@@ -5,7 +5,7 @@ import { azElToVector } from '../../math/coords';
 import { TELEMETRY_STRIDE, T_AZ, T_ECLIPSED, T_EL } from '../../math/telemetryLayout';
 import { telemetry } from '../../state/runtime';
 import { useAppStore } from '../../state/store';
-import { SKY_RADIUS } from './SatelliteField';
+import { SKY_RADIUS } from '../../data/groups';
 import { createTextTexture, textureAspect } from './textSprite';
 
 function HighlightLabel({ name }: { name: string }): React.JSX.Element {
@@ -13,8 +13,8 @@ function HighlightLabel({ name }: { name: string }): React.JSX.Element {
     () =>
       createTextTexture(name, {
         fontSize: 72,
-        color: '#fde68a',
-        glow: 'rgba(251, 191, 36, 0.8)',
+        color: '#ffd60a',
+        glow: 'rgba(255, 159, 10, 0.75)',
         bold: false,
       }),
     [name],
@@ -76,12 +76,12 @@ export function HighlightMarkers(): React.JSX.Element | null {
         >
           <mesh>
             <octahedronGeometry args={[4.4, 0]} />
-            <meshBasicMaterial color="#fcd34d" toneMapped={false} />
+            <meshBasicMaterial color="#ffd60a" toneMapped={false} />
           </mesh>
           <mesh>
             <ringGeometry args={[7.5, 9.2, 48]} />
             <meshBasicMaterial
-              color="#f59e0b"
+              color="#ff9f0a"
               transparent
               opacity={0.75}
               blending={AdditiveBlending}

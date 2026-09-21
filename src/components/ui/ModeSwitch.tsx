@@ -1,44 +1,43 @@
-import { Eye, Globe2, Satellite } from 'lucide-react';
+import { SKY_MODES } from '../../data/skyModes';
 import { useAppStore } from '../../state/store';
-import type { SkyFilterMode } from '../../types';
 
-export const SKY_MODES: Array<{
-  value: SkyFilterMode;
-  label: string;
-  hint: string;
-  icon: typeof Eye;
-}> = [
-  {
-    value: 'all',
-    label: 'Alle',
-    hint: 'Jedes Katalogobjekt über dem Horizont – unabhängig von Größe und Helligkeit.',
-    icon: Globe2,
-  },
-  {
-    value: 'nakedEye',
-    label: 'Sichtbar',
-    hint: 'Nur sonnenbeschienene Objekte heller als 4 mag bei dunklem Himmel über 10° Höhe.',
-    icon: Eye,
-  },
-  {
-    value: 'starlink',
-    label: 'Starlink',
-    hint: 'Ausschließlich Starlink-Satelliten über dem Horizont.',
-    icon: Satellite,
-  },
-];
+const GAP_PX = 2;
 
-/** Segmentierter Umschalter zwischen den drei Himmelsfiltern. */
+/**
+ * Segmentierter Umschalter im iOS-Stil.
+ *
+ * Der ausgewählte Zustand ist ein eigener, gleitender „Daumen“ hinter den
+ * Beschriftungen – er wird per `transform` bewegt, läuft also auf dem
+ * Compositor und nicht über Layout. Breite und Versatz kommen aus `calc()`
+ * statt aus einer Messung, damit beim Ein-/Ausblenden nichts springt.
+ */
 export function ModeSwitch({ compact = false }: { compact?: boolean }): React.JSX.Element {
   const mode = useAppStore((s) => s.filters.mode);
   const setMode = useAppStore((s) => s.setMode);
+
+  const count = SKY_MODES.length;
+  const activeIndex = Math.max(
+    0,
+    SKY_MODES.findIndex((m) => m.value === mode),
+  );
 
   return (
     <div
       role="group"
       aria-label="Darstellungsmodus"
-      className="grid grid-cols-3 gap-1 rounded-lg border border-sky-400/20 bg-slate-900/70 p-1"
+      className="segmented w-full"
+      style={{ gridTemplateColumns: `repeat(${count}, minmax(0, 1fr))` }}
     >
+      <span
+        aria-hidden
+        className="segmented-thumb"
+        style={{
+          width: `calc((100% - ${GAP_PX * 2 + GAP_PX * (count - 1)}px) / ${count})`,
+          left: `${GAP_PX}px`,
+          transform: `translateX(calc(${activeIndex} * (100% + ${GAP_PX}px)))`,
+        }}
+      />
+
       {SKY_MODES.map((m) => {
         const Icon = m.icon;
         const active = mode === m.value;
@@ -49,15 +48,10 @@ export function ModeSwitch({ compact = false }: { compact?: boolean }): React.JS
             aria-pressed={active}
             title={m.hint}
             onClick={() => setMode(m.value)}
-            className={`flex items-center justify-center gap-1.5 rounded-md transition ${
-              compact ? 'px-2 py-1 text-[10px]' : 'px-2 py-1.5 text-[11px]'
-            } font-medium ${
-              active
-                ? 'bg-sky-400/25 text-sky-100 shadow-[inset_0_0_0_1px_rgb(56_189_248/0.5)]'
-                : 'text-slate-400 hover:bg-sky-400/10'
-            }`}
+            className="segment"
+            style={compact ? { minHeight: 30, fontSize: 12.5 } : undefined}
           >
-            <Icon size={compact ? 12 : 13} />
+            <Icon size={compact ? 13 : 14} strokeWidth={2.1} aria-hidden />
             {m.label}
           </button>
         );

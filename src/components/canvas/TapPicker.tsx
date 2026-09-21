@@ -10,17 +10,14 @@ import {
   T_RANGE,
 } from '../../math/telemetryLayout';
 import { passesSkyFilter } from '../../math/visibility';
-import { telemetry } from '../../state/runtime';
+import { catalogIndex, telemetry } from '../../state/runtime';
 import { useAppStore } from '../../state/store';
 import { engine } from '../../hooks/useSatelliteEngine';
-import { GROUP_ORDER, MAX_INSTANCES } from './SatelliteField';
 
 const TAP_MOVE_TOLERANCE_PX = 12;
 const TAP_DURATION_MS = 450;
 /** Winkeltoleranz bei 70° FOV – skaliert mit dem Zoom, damit Treffer fair bleiben. */
 const BASE_PICK_ANGLE_DEG = 3.2;
-
-const STARLINK_GROUP_ID = GROUP_ORDER.indexOf('starlink');
 
 const raycaster = new Raycaster();
 const ndc = new Vector2();
@@ -38,19 +35,9 @@ export function TapPicker(): null {
   const gl = useThree((s) => s.gl);
   const select = useAppStore((s) => s.select);
   const mode = useAppStore((s) => s.filters.mode);
-  const catalog = useAppStore((s) => s.catalog);
 
   const modeRef = useRef(mode);
-  const groupIdsRef = useRef<Uint8Array>(new Uint8Array(MAX_INSTANCES));
   modeRef.current = mode;
-
-  useEffect(() => {
-    const ids = new Uint8Array(MAX_INSTANCES);
-    for (const sat of catalog) {
-      if (sat.index < MAX_INSTANCES) ids[sat.index] = GROUP_ORDER.indexOf(sat.group);
-    }
-    groupIdsRef.current = ids;
-  }, [catalog]);
 
   useEffect(() => {
     const element = gl.domElement;
@@ -86,7 +73,9 @@ export function TapPicker(): null {
       const minDot = Math.cos(maxAngle);
 
       const data = telemetry.data;
-      const groupIds = groupIdsRef.current;
+      // Vorberechnete Flags statt String-Vergleich je Objekt – der Katalog kann
+      // fünfstellig sein, und der Tap darf nicht spürbar hängen.
+      const starlinkFlags = catalogIndex.starlink;
       const activeMode = modeRef.current;
 
       let bestIndex = -1;
@@ -99,7 +88,7 @@ export function TapPicker(): null {
         if (
           !passesSkyFilter(
             activeMode,
-            groupIds[i] === STARLINK_GROUP_ID,
+            starlinkFlags[i] === 1,
             elevation,
             data[base + T_ECLIPSED] > 0.5,
             data[base + T_MAG],

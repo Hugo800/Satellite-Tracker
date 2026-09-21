@@ -1,27 +1,21 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Search, SlidersHorizontal, X } from 'lucide-react';
 import { RAD, compassLabel } from '../../math/coords';
 import { INVISIBLE_MAGNITUDE, passesSkyFilter } from '../../math/visibility';
 import { engine } from '../../hooks/useSatelliteEngine';
 import { readSample, requestFocus } from '../../state/runtime';
+import type { SatelliteSample } from '../../state/runtime';
 import { useAppStore } from '../../state/store';
-import { formatNumber } from '../../utils/format';
-import { ModeSwitch, SKY_MODES } from './ModeSwitch';
-import type { SatelliteGroup, SatelliteMeta } from '../../types';
+import { formatCount, formatNumber } from '../../utils/format';
+import { ModeSwitch } from './ModeSwitch';
+import { GROUP_COLORS, GROUP_LABEL } from '../../data/groups';
+import { SKY_MODES } from '../../data/skyModes';
+import type { SatelliteMeta } from '../../types';
 
-const GROUP_LABEL: Record<SatelliteGroup, string> = {
-  stations: 'ISS & Stationen',
-  brightest: 'Hellste',
-  weather: 'Wetter',
-  starlink: 'Starlink',
-};
-
-const GROUP_DOT: Record<SatelliteGroup, string> = {
-  stations: 'bg-amber-400',
-  brightest: 'bg-slate-200',
-  weather: 'bg-emerald-400',
-  starlink: 'bg-sky-400',
-};
+/** Feste Zeilenhöhe – Voraussetzung für die Fensterung ohne Messung je Zeile. */
+const ROW_HEIGHT = 58;
+/** Zusätzlich gerenderte Zeilen ober- und unterhalb des Sichtfensters. */
+const OVERSCAN = 6;
 
 interface Row {
   meta: SatelliteMeta;
@@ -33,7 +27,17 @@ interface Row {
   matchesSky: boolean;
 }
 
-/** Durchsuchbare Satellitenliste mit Modusumschaltung und weicher Kamera-Anfahrt. */
+/** Ein wiederverwendetes Ziel für `readSample` – der Katalog ist fünfstellig. */
+const scratch = {} as SatelliteSample;
+
+/**
+ * Durchsuchbare Satellitenliste mit Modusumschaltung und weicher Kamera-Anfahrt.
+ *
+ * Die Liste ist **nicht** gekappt: Sie führt jedes Objekt, das dem Filter
+ * entspricht. Damit das auch bei mehreren tausend Treffern flüssig bleibt,
+ * hängen nur die tatsächlich sichtbaren Zeilen im DOM – der Rest wird über die
+ * Gesamthöhe des Scrollbereichs dargestellt.
+ */
 export function SatelliteDrawer(): React.JSX.Element {
   const drawerOpen = useAppStore((s) => s.drawerOpen);
   const setDrawerOpen = useAppStore((s) => s.setDrawerOpen);
@@ -53,6 +57,7 @@ export function SatelliteDrawer(): React.JSX.Element {
 
   const rows = useMemo<Row[]>(() => {
     void refreshTick;
+    if (!drawerOpen) return [];
     const query = filters.query.trim().toLowerCase();
 
     const result: Row[] = [];
@@ -61,7 +66,7 @@ export function SatelliteDrawer(): React.JSX.Element {
         continue;
       }
 
-      const sample = readSample(meta.index);
+      const sample = readSample(meta.index, scratch);
       const elevationRad = sample ? sample.elevation : -Math.PI / 2;
       const magnitude = sample ? sample.magnitude : INVISIBLE_MAGNITUDE;
       const eclipsed = sample ? sample.eclipsed : true;
@@ -93,11 +98,58 @@ export function SatelliteDrawer(): React.JSX.Element {
       if (filters.mode === 'nakedEye') return a.magnitude - b.magnitude;
       return b.elevationDeg - a.elevationDeg;
     });
-    return result.slice(0, 400);
-  }, [catalog, filters, refreshTick]);
+    return result;
+  }, [catalog, filters, refreshTick, drawerOpen]);
 
   const activeMode = SKY_MODES.find((m) => m.value === filters.mode) ?? SKY_MODES[0];
-  const visibleCount = rows.filter((r) => r.matchesSky).length;
+  const visibleCount = useMemo(() => rows.reduce((n, r) => n + (r.matchesSky ? 1 : 0), 0), [rows]);
+
+  /* --- Fensterung --- */
+  const listRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewport, setViewport] = useState(640);
+  const scrollFrame = useRef(0);
+
+  const onScroll = useCallback(() => {
+    if (scrollFrame.current) return;
+    scrollFrame.current = requestAnimationFrame(() => {
+      scrollFrame.current = 0;
+      if (listRef.current) setScrollTop(listRef.current.scrollTop);
+    });
+  }, []);
+
+  useEffect(() => () => cancelAnimationFrame(scrollFrame.current), []);
+
+  useEffect(() => {
+    const node = listRef.current;
+    if (!node || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => setViewport(node.clientHeight));
+    observer.observe(node);
+    setViewport(node.clientHeight);
+    return () => observer.disconnect();
+  }, []);
+
+  // Beim Filter-/Suchwechsel wieder nach oben – sonst zeigt das Fenster in
+  // eine Liste, die es nicht mehr gibt.
+  useEffect(() => {
+    listRef.current?.scrollTo({ top: 0 });
+    setScrollTop(0);
+  }, [filters.mode, filters.query, filters.includeBelowHorizon]);
+
+  const first = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+  const windowSize = Math.ceil(viewport / ROW_HEIGHT) + OVERSCAN * 2;
+  const window_ = rows.slice(first, first + windowSize);
+
+  const pick = useCallback(
+    (row: Row) => {
+      select(row.meta.index);
+      engine.requestPass(row.meta.index);
+      const sample = readSample(row.meta.index);
+      if (sample) requestFocus(sample.azimuth, sample.elevation);
+      setDrawerOpen(false);
+    },
+    [select, setDrawerOpen],
+  );
 
   return (
     <>
@@ -105,46 +157,50 @@ export function SatelliteDrawer(): React.JSX.Element {
         <button
           type="button"
           aria-label="Menü schließen"
-          className="pointer-events-auto fixed inset-0 z-30 bg-black/50"
+          className="pointer-events-auto fixed inset-0 z-30 transition-opacity"
+          style={{ background: 'var(--scrim)', transitionDuration: 'var(--t-base)' }}
           onClick={() => setDrawerOpen(false)}
         />
       )}
 
       <aside
-        className={`pointer-events-auto fixed inset-y-0 right-0 z-40 flex w-[min(86vw,23rem)] flex-col border-l border-sky-400/20 bg-[#04080f]/95 backdrop-blur-xl transition-transform duration-300 ${
-          drawerOpen ? 'translate-x-0' : 'translate-x-full'
-        }`}
-        style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}
+        className="material-strong pointer-events-auto fixed inset-y-0 right-0 z-40 flex w-[min(88vw,24rem)] flex-col border-y-0 border-r-0"
+        style={{
+          paddingTop: 'var(--safe-top)',
+          paddingBottom: 'var(--safe-bottom)',
+          transform: drawerOpen ? 'translateX(0)' : 'translateX(100%)',
+          transition: `transform var(--t-slow) var(--ease-out)`,
+        }}
         inert={!drawerOpen}
       >
-        <header className="flex items-center gap-2 border-b border-sky-400/20 px-3 py-3">
-          <SlidersHorizontal size={16} className="text-sky-300" />
-          <h2 className="flex-1 text-sm font-semibold tracking-wide text-sky-100">
-            {visibleCount} am Himmel
+        <header className="hairline-b flex items-center gap-2 px-3 py-2.5">
+          <SlidersHorizontal size={16} strokeWidth={2.2} className="text-accent" aria-hidden />
+          <h2 className="flex-1 text-[17px] font-semibold tracking-[-0.01em] text-label">
+            {formatCount(visibleCount)} am Himmel
           </h2>
           <button
             type="button"
             aria-label="Schließen"
-            className="rounded p-1 text-sky-300 hover:bg-sky-400/15"
+            className="icon-button"
             onClick={() => setDrawerOpen(false)}
           >
-            <X size={18} />
+            <X size={19} strokeWidth={2} aria-hidden />
           </button>
         </header>
 
-        <div className="space-y-2 border-b border-sky-400/10 px-3 py-2.5">
+        <div className="hairline-b space-y-2.5 px-3 py-3">
           <ModeSwitch />
 
-          <p className="text-[10px] leading-snug text-slate-500">{activeMode.hint}</p>
+          <p className="text-[12px] leading-snug text-label-2">{activeMode.hint}</p>
 
-          <label className="flex items-center gap-2 rounded-lg border border-sky-400/20 bg-sky-950/40 px-2.5 py-1.5">
-            <Search size={14} className="text-sky-300/70" />
+          <label className="field">
+            <Search size={15} strokeWidth={2.2} className="text-label-3" aria-hidden />
             <input
               value={filters.query}
               onChange={(e) => setFilters({ query: e.target.value })}
               placeholder="Name oder NORAD-ID …"
-              className="w-full bg-transparent text-sm text-sky-100 outline-none placeholder:text-sky-300/40"
               type="search"
+              aria-label="Satelliten suchen"
             />
           </label>
 
@@ -152,70 +208,93 @@ export function SatelliteDrawer(): React.JSX.Element {
             type="button"
             aria-pressed={filters.includeBelowHorizon}
             onClick={() => setFilters({ includeBelowHorizon: !filters.includeBelowHorizon })}
-            className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
-              filters.includeBelowHorizon
-                ? 'border-sky-400/60 bg-sky-400/20 text-sky-100'
-                : 'border-slate-600/50 bg-slate-800/40 text-slate-400'
-            }`}
+            className="pill"
           >
             Auch nicht sichtbare listen
           </button>
         </div>
 
-        <ul className="no-scrollbar flex-1 overflow-y-auto overscroll-contain">
-          {rows.length === 0 && (
-            <li className="px-4 py-8 text-center text-xs text-slate-500">
+        <div
+          ref={listRef}
+          onScroll={onScroll}
+          className="no-scrollbar flex-1 overflow-y-auto overscroll-contain"
+        >
+          {rows.length === 0 ? (
+            <p className="px-4 py-10 text-center text-[13px] text-label-2">
               Aktuell entspricht kein Objekt diesem Filter.
-            </li>
-          )}
-          {rows.map((row) => (
-            <li key={row.meta.noradId}>
-              <button
-                type="button"
-                onClick={() => {
-                  select(row.meta.index);
-                  engine.requestPass(row.meta.index);
-                  const sample = readSample(row.meta.index);
-                  if (sample) requestFocus(sample.azimuth, sample.elevation);
-                  setDrawerOpen(false);
-                }}
-                className={`flex w-full items-center gap-2.5 border-b border-slate-800/60 px-3 py-2.5 text-left transition ${
-                  selectedIndex === row.meta.index ? 'bg-sky-400/10' : 'hover:bg-sky-400/5'
-                } ${row.matchesSky ? '' : 'opacity-45'}`}
-              >
-                <span
-                  className={`h-2 w-2 shrink-0 rounded-full ${GROUP_DOT[row.meta.group]} ${
-                    row.eclipsed ? 'opacity-30' : ''
-                  }`}
+            </p>
+          ) : (
+            <div style={{ height: rows.length * ROW_HEIGHT, position: 'relative' }}>
+              {window_.map((row, i) => (
+                <ListRow
+                  key={row.meta.noradId}
+                  row={row}
+                  top={(first + i) * ROW_HEIGHT}
+                  selected={selectedIndex === row.meta.index}
+                  onSelect={pick}
                 />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] font-medium text-sky-50">
-                    {row.meta.name}
-                  </span>
-                  <span className="block text-[10px] text-slate-400">
-                    {GROUP_LABEL[row.meta.group]}
-                    {row.magnitude < INVISIBLE_MAGNITUDE
-                      ? ` · ${formatNumber(row.magnitude, 1)} mag`
-                      : ' · Erdschatten'}
-                  </span>
-                </span>
-                <span className="shrink-0 text-right">
-                  <span
-                    className={`block text-[13px] tabular-nums ${
-                      row.elevationDeg > 0 ? 'text-emerald-300' : 'text-slate-500'
-                    }`}
-                  >
-                    {formatNumber(row.elevationDeg, 1)}°
-                  </span>
-                  <span className="block text-[10px] tabular-nums text-slate-400">
-                    {compassLabel(row.azimuthDeg)} · {formatNumber(row.rangeKm, 0)} km
-                  </span>
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
+              ))}
+            </div>
+          )}
+        </div>
       </aside>
     </>
+  );
+}
+
+function ListRow({
+  row,
+  top,
+  selected,
+  onSelect,
+}: {
+  row: Row;
+  top: number;
+  selected: boolean;
+  onSelect: (row: Row) => void;
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(row)}
+      className="row hairline-b absolute inset-x-0"
+      style={{
+        top,
+        height: ROW_HEIGHT,
+        background: selected ? 'color-mix(in srgb, var(--accent) 14%, transparent)' : undefined,
+        opacity: row.matchesSky ? 1 : 0.45,
+      }}
+    >
+      <span
+        aria-hidden
+        className="h-2 w-2 shrink-0 rounded-full"
+        style={{
+          background: GROUP_COLORS[row.meta.group],
+          opacity: row.eclipsed ? 0.35 : 1,
+        }}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[15px] font-medium tracking-[-0.01em] text-label">
+          {row.meta.name}
+        </span>
+        <span className="block truncate text-[11.5px] text-label-2">
+          {GROUP_LABEL[row.meta.group]}
+          {row.magnitude < INVISIBLE_MAGNITUDE
+            ? ` · ${formatNumber(row.magnitude, 1)} mag`
+            : ' · Erdschatten'}
+        </span>
+      </span>
+      <span className="shrink-0 text-right">
+        <span
+          className="block text-[15px] font-medium"
+          style={{ color: row.elevationDeg > 0 ? 'var(--positive)' : 'var(--label-3)' }}
+        >
+          {formatNumber(row.elevationDeg, 1)}°
+        </span>
+        <span className="block text-[11.5px] text-label-2">
+          {compassLabel(row.azimuthDeg)} · {formatNumber(row.rangeKm, 0)} km
+        </span>
+      </span>
+    </button>
   );
 }

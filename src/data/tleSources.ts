@@ -4,44 +4,66 @@ export interface TleSource {
   group: SatelliteGroup;
   label: string;
   url: string;
-  /** Obergrenze, um mobile GPUs nicht zu überfahren. */
-  limit: number;
-  /** Starlink liefert mehrere Megabyte – dafür reicht das Standardfenster nicht. */
+  /** Starlink und der Gesamtkatalog liefern mehrere Megabyte – dafür reicht das Standardfenster nicht. */
   timeoutMs: number;
 }
 
 const GP = 'https://celestrak.org/NORAD/elements/gp.php';
 
+/**
+ * Reihenfolge ist bedeutungstragend: Der Parser übernimmt jede NORAD-ID nur
+ * einmal, und zwar mit der Gruppe, in der sie **zuerst** auftaucht. Die
+ * spezifischen Gruppen stehen deshalb vorn (sie liefern Farbe und Filter),
+ * `active` steht hinten und füllt den Rest des Katalogs auf.
+ *
+ * Bewusst **ohne** jede Mengenbegrenzung: Im Modus „Alle“ soll ausnahmslos
+ * jedes trackbare Objekt propagiert und dargestellt werden. Was der Nutzer
+ * am Himmel sieht, entscheidet allein der Horizont – nicht ein Hardcode.
+ */
 export const TLE_SOURCES: Record<SatelliteGroup, TleSource> = {
   stations: {
     group: 'stations',
     label: 'Raumstationen',
     url: `${GP}?GROUP=stations&FORMAT=tle`,
-    limit: 120,
-    timeoutMs: 15_000,
+    timeoutMs: 20_000,
   },
   brightest: {
     group: 'brightest',
     label: 'Hellste Objekte',
     url: `${GP}?GROUP=visual&FORMAT=tle`,
-    limit: 260,
-    timeoutMs: 20_000,
+    timeoutMs: 25_000,
   },
   weather: {
     group: 'weather',
     label: 'Wettersatelliten',
     url: `${GP}?GROUP=weather&FORMAT=tle`,
-    limit: 200,
-    timeoutMs: 20_000,
+    timeoutMs: 25_000,
   },
   starlink: {
     group: 'starlink',
     label: 'Starlink',
     url: `${GP}?GROUP=starlink&FORMAT=tle`,
-    limit: 2600,
-    timeoutMs: 60_000,
+    timeoutMs: 90_000,
+  },
+  other: {
+    group: 'other',
+    label: 'Gesamtkatalog',
+    // `active` ist der vollständige Satz aktiver Objekte (≈ 12 000 TLE-Sätze,
+    // ~2,5 MB). Alles, was die Gruppen davor nicht schon erfasst haben,
+    // landet hier – damit ist der Katalog lückenlos.
+    url: `${GP}?GROUP=active&FORMAT=tle`,
+    timeoutMs: 120_000,
   },
 };
+
+/** Ladereihenfolge: spezifisch → allgemein (siehe Kommentar oben). */
+export const GROUP_LOAD_ORDER: SatelliteGroup[] = [
+  'stations',
+  'brightest',
+  'weather',
+  'starlink',
+  'other',
+];
 
 /** NORAD-IDs, die ein eigenes Mesh + Label bekommen. */
 export const HIGHLIGHT_NORAD_IDS = new Set([

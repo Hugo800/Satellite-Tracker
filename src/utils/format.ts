@@ -56,3 +56,11 @@ export function formatNumber(value: number, digits = 1): string {
     maximumFractionDigits: digits,
   });
 }
+
+const COUNT_FMT = new Intl.NumberFormat('de-DE', { maximumFractionDigits: 0 });
+
+/** Ganzzahl mit Tausenderpunkt – der Katalog wird fünfstellig. */
+export function formatCount(value: number): string {
+  if (!Number.isFinite(value)) return '–';
+  return COUNT_FMT.format(Math.round(value));
+}

@@ -38,7 +38,7 @@ export function createTextTexture(text: string, options: TextSpriteOptions = {})
   ctx.textBaseline = 'middle';
   ctx.shadowColor = options.glow ?? 'rgba(56, 189, 248, 0.9)';
   ctx.shadowBlur = fontSize * 0.35;
-  ctx.fillStyle = options.color ?? '#e0f2fe';
+  ctx.fillStyle = options.color ?? '#f5f5f7';
   ctx.fillText(text, width / 2, height / 2);
 
   const texture = new CanvasTexture(canvas);

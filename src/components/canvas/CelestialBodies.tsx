@@ -10,7 +10,7 @@ import {
 } from 'three';
 import { DEG, azElToVector, clamp } from '../../math/coords';
 import { useAppStore } from '../../state/store';
-import { SKY_RADIUS } from './SatelliteField';
+import { SKY_RADIUS } from '../../data/groups';
 
 /** Sonne und Mond liegen hinter den Satelliten, aber vor dem Sternenhimmel. */
 const BODY_RADIUS = SKY_RADIUS * 1.08;
