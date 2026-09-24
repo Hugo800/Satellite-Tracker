@@ -1,10 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
-import { PerspectiveCamera } from 'three';
+import { PerspectiveCamera, Vector3 } from 'three';
 import { RAD, angleDelta, clamp, normalizeAngle } from '../../math/coords';
-import { clampPitch } from '../../math/orientation';
+import { RollHandover, arSmoothingFactor, clampPitch } from '../../math/orientation';
 import { orientationState, viewState } from '../../state/runtime';
 import { useAppStore } from '../../state/store';
 
@@ -13,12 +13,128 @@ const MAX_FOV = 95;
 /** Kamera sitzt praktisch im Ursprung; der Mini-Offset hält OrbitControls stabil. */
 const EPS_DISTANCE = 1e-4;
 
+const handoverForward = new Vector3();
+
+/**
+ * Priorität des Moduswechsels: vor dem Frame des drei-Wrappers von
+ * OrbitControls (Priorität −1, @react-three/drei core/OrbitControls.js), der
+ * `enabled` liest und nur dann `update()` ruft – so gilt ein Wechsel im selben
+ * Bild. Die übrige Kameraführung läuft danach mit Priorität 0.
+ */
+export const AR_SWITCH_PRIORITY = -2;
+
+/** Was die Bildlogik von OrbitControls braucht (three-stdlib erfüllt es). */
+export interface RigControls {
+  enabled: boolean;
+  getAzimuthalAngle(): number;
+  getPolarAngle(): number;
+  setAzimuthalAngle(value: number): void;
+  setPolarAngle(value: number): void;
+  update(): void;
+}
+
+export interface CameraRigFrame {
+  /** Priorität `AR_SWITCH_PRIORITY`: Moduswechsel AR ↔ Touch, `controls.enabled`. */
+  beforeControls: () => void;
+  /** Priorität 0: AR-Nachführung oder Touch-Fokus, Übergabe, `viewState`. */
+  afterControls: (deltaS: number) => void;
+}
+
+/**
+ * Die Bildlogik des CameraRig ohne React: Die Komponente hängt nur die beiden
+ * Funktionen in den Frame-Takt. So prüft scripts/verify-rig.ts genau diesen Code
+ * mit dem echten OrbitControls aus three-stdlib, statt einer Nachbildung.
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- für scripts/verify-rig.ts; kostet nur Fast Refresh dieser Datei
+export function createCameraRigFrame(
+  camera: PerspectiveCamera,
+  controls: () => RigControls | null,
+  arEnabled: () => boolean,
+  fovDeg: () => number,
+): CameraRigFrame {
+  let arActive = false;
+  /** Rollwinkel der letzten AR-Lage; klingt auf der OrbitControls-Lage aus. */
+  const handover = new RollHandover();
+
+  const beforeControls = () => {
+    const active = arEnabled() && orientationState.available;
+
+    if (arActive && !active) {
+      // OrbitControls leitet die Blickrichtung allein aus der Kameraposition ab,
+      // die AR nie verändert. Ohne diese Übergabe spränge die Ansicht auf die
+      // Richtung von vor dem AR-Modus zurück.
+      handoverForward.set(0, 0, -1).applyQuaternion(camera.quaternion);
+      camera.position.copy(handoverForward).multiplyScalar(-EPS_DISTANCE);
+      handover.begin(camera.quaternion);
+    } else if (active) {
+      handover.cancel();
+    }
+
+    arActive = active;
+    const current = controls();
+    if (current) current.enabled = !active;
+  };
+
+  const afterControls = (delta: number) => {
+    const current = controls();
+
+    if (arActive) {
+      // Fokusanfragen gelten der Touch-Ansicht; im AR-Modus bestimmt das Gerät
+      // die Richtung. Liegen gelassen, schlüge die Anfrage beim Verlassen von AR
+      // als Kameraschwenk zu.
+      viewState.focus = null;
+      // Leichtes Slerp glättet den Restjitter der Sensorfusion; die Kursführung
+      // selbst passiert bereits in useDeviceOrientation.
+      camera.quaternion.slerp(orientationState.quaternion, arSmoothingFactor(delta));
+      // Auch der Zwischenschritt der Interpolation bleibt über dem Horizont.
+      clampPitch(camera.quaternion);
+    } else if (current && viewState.focus) {
+      const targetTheta = -viewState.focus.azimuth;
+      const targetPhi = clamp(Math.PI / 2 + viewState.focus.elevation, 0.02, Math.PI - 0.02);
+      const theta = current.getAzimuthalAngle();
+      const phi = current.getPolarAngle();
+      const dTheta = angleDelta(targetTheta, theta);
+      const dPhi = targetPhi - phi;
+      const k = Math.min(1, delta * 4.5);
+
+      current.setAzimuthalAngle(theta + dTheta * k);
+      current.setPolarAngle(phi + dPhi * k);
+      current.update();
+
+      if (Math.abs(dTheta) < 0.004 && Math.abs(dPhi) < 0.004) viewState.focus = null;
+    }
+
+    // OrbitControls richtet per lookAt ohne Rollwinkel aus; der Rollwinkel der
+    // zuletzt gezeigten AR-Lage klingt als Versatz auf der aktuellen lookAt-Lage
+    // ab. Ziehen wirkt sofort, ohne Nachlauf. Ohne vorheriges AR ein No-op.
+    if (!arActive) handover.apply(camera.quaternion, delta);
+
+    const fov = fovDeg();
+    if (Math.abs(camera.fov - fov) > 0.01) {
+      camera.fov = fov;
+      camera.updateProjectionMatrix();
+    }
+
+    camera.getWorldDirection(viewState.forward);
+    viewState.quaternion.copy(camera.quaternion);
+    viewState.fovDeg = camera.fov;
+    viewState.aspect = camera.aspect;
+    viewState.azimuthDeg =
+      normalizeAngle(Math.atan2(viewState.forward.x, -viewState.forward.z)) * RAD;
+    viewState.elevationDeg =
+      Math.atan2(viewState.forward.y, Math.hypot(viewState.forward.x, viewState.forward.z)) * RAD;
+  };
+
+  return { beforeControls, afterControls };
+}
+
 /**
  * Kamerasteuerung im Zentrum der Himmelskugel.
  *
  * - Touch/Maus: OrbitControls mit invertierter Rotationsrichtung ("Himmel ziehen").
  * - Pinch/Wheel: verändert die Brennweite (FOV) statt der Distanz.
  * - AR-Modus: Quaternion des Geräte-Sensors wird direkt auf die Kamera geslerpt.
+ *   Beim Verlassen übernimmt OrbitControls die zuletzt gezeigte Blickrichtung.
  *
  * Sämtliche Winkel leben in Refs bzw. im Modulzustand – nie im React-State.
  */
@@ -29,6 +145,16 @@ export function CameraRig(): React.JSX.Element {
   const arEnabled = useAppStore((s) => s.arEnabled);
   const arRef = useRef(arEnabled);
   const fovRef = useRef(viewState.fovDeg);
+  const frame = useMemo(
+    () =>
+      createCameraRigFrame(
+        camera,
+        () => controlsRef.current,
+        () => arRef.current,
+        () => fovRef.current,
+      ),
+    [camera],
+  );
 
   arRef.current = arEnabled;
 
@@ -91,48 +217,8 @@ export function CameraRig(): React.JSX.Element {
     };
   }, [gl]);
 
-  useFrame((_, delta) => {
-    const controls = controlsRef.current;
-    const arActive = arRef.current && orientationState.available;
-
-    if (controls) controls.enabled = !arActive;
-
-    if (arActive) {
-      // Leichtes Slerp glättet den Restjitter der Sensorfusion; die Kursmittelung
-      // selbst passiert bereits in useDeviceOrientation.
-      camera.quaternion.slerp(orientationState.quaternion, Math.min(1, delta * 9));
-      // Auch der Zwischenschritt der Interpolation bleibt über dem Horizont.
-      clampPitch(camera.quaternion);
-    } else if (controls && viewState.focus) {
-      const targetTheta = -viewState.focus.azimuth;
-      const targetPhi = clamp(Math.PI / 2 + viewState.focus.elevation, 0.02, Math.PI - 0.02);
-      const theta = controls.getAzimuthalAngle();
-      const phi = controls.getPolarAngle();
-      const dTheta = angleDelta(targetTheta, theta);
-      const dPhi = targetPhi - phi;
-      const k = Math.min(1, delta * 4.5);
-
-      controls.setAzimuthalAngle(theta + dTheta * k);
-      controls.setPolarAngle(phi + dPhi * k);
-      controls.update();
-
-      if (Math.abs(dTheta) < 0.004 && Math.abs(dPhi) < 0.004) viewState.focus = null;
-    }
-
-    if (Math.abs(camera.fov - fovRef.current) > 0.01) {
-      camera.fov = fovRef.current;
-      camera.updateProjectionMatrix();
-    }
-
-    camera.getWorldDirection(viewState.forward);
-    viewState.quaternion.copy(camera.quaternion);
-    viewState.fovDeg = camera.fov;
-    viewState.aspect = camera.aspect;
-    viewState.azimuthDeg =
-      normalizeAngle(Math.atan2(viewState.forward.x, -viewState.forward.z)) * RAD;
-    viewState.elevationDeg =
-      Math.atan2(viewState.forward.y, Math.hypot(viewState.forward.x, viewState.forward.z)) * RAD;
-  });
+  useFrame(frame.beforeControls, AR_SWITCH_PRIORITY);
+  useFrame((_, delta) => frame.afterControls(delta));
 
   return (
     <OrbitControls

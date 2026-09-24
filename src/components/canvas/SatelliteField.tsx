@@ -234,6 +234,21 @@ export function SatelliteField(): React.JSX.Element {
 
   const frameState = useRef({ revision: -1, elapsed: 0, visible: 0, mode: '' });
 
+  // Der Ring richtet sich erst beim Zeichnen nach der Kamera aus. Im Frame-Takt
+  // (Priorität 0) läuft er vor dem CameraRig und sähe nach dem Verlassen von AR
+  // die rollfreie lookAt-Lage statt der gezeigten (bis 12,75° verdreht).
+  useEffect(() => {
+    const ring = selectionRef.current;
+    if (!ring) return;
+    ring.onBeforeRender = (_renderer, _scene, renderCamera) => {
+      ring.quaternion.copy(renderCamera.quaternion);
+      ring.updateMatrixWorld();
+    };
+    return () => {
+      ring.onBeforeRender = () => {};
+    };
+  }, []);
+
   // Neue Attribut-Buffer starten leer; der nächste Tick muss sie vollständig
   // befüllen, sonst stünden alte Winkel an neuen Plätzen.
   useEffect(() => {
@@ -356,7 +371,6 @@ export function SatelliteField(): React.JSX.Element {
     const el = prev[selected * 2 + 1] + (cur[selected * 2 + 1] - prev[selected * 2 + 1]) * t;
 
     azElToVector(az, el, SKY_RADIUS, ring.position);
-    ring.quaternion.copy(camera.quaternion);
     ring.scale.setScalar(Math.max(26, buffers.size.array[selected] * 2.6) * sizeScale);
     ring.visible = true;
   });

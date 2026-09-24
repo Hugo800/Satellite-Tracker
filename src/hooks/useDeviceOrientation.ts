@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { Euler, Quaternion, Vector3 } from 'three';
-import { DEG, RAD, angleDelta, clamp, normalizeAngle } from '../math/coords';
-import { AR_MIN_ELEVATION, clampPitch } from '../math/orientation';
-import { orientationState } from '../state/runtime';
+import { Quaternion, Vector3 } from 'three';
+import { DEG, RAD, normalizeAngle } from '../math/coords';
+import { decimalYear, magneticDeclinationDeg } from '../math/declination';
+import {
+  AR_MIN_ELEVATION,
+  HeadingFusion,
+  MAX_COMPASS_ACCURACY_DEG,
+  attitudeToCamera,
+  clampPitch,
+  type OrientationSample,
+} from '../math/orientation';
+import { orientationState, type OrientationState } from '../state/runtime';
 import { useAppStore } from '../state/store';
-import type { CompassStatus } from '../types';
+import type { CompassStatus, GeoCoord } from '../types';
 
 interface IosDeviceOrientationEvent extends DeviceOrientationEvent {
   webkitCompassHeading?: number;
@@ -15,48 +23,154 @@ type PermissionCapableCtor = typeof DeviceOrientationEvent & {
   requestPermission?: () => Promise<'granted' | 'denied' | 'default'>;
 };
 
-/** Ab hier zeigt das Gerät nahezu senkrecht; der Azimut ist dort entartet. */
-const NEAR_VERTICAL = 0.97;
-/** iOS meldet die Kompassgüte in Grad; darüber gilt er als unkalibriert. */
-const MAX_COMPASS_ACCURACY_DEG = 25;
-/**
- * Grunddämpfung und Fehlerabhängigkeit des Kursfilters (bezogen auf 60 Hz).
- * Simuliert: dämpft ±4° Magnetometerrauschen auf ~0,6° bei ~4,6° Nachlauf
- * während einer 90°/s-Drehung.
- */
-const HEADING_GAIN_MIN = 0.06;
-const HEADING_GAIN_SLOPE = 1.6;
-
-const ZEE = new Vector3(0, 0, 1);
-const EULER = new Euler();
-const Q0 = new Quaternion();
-/** −90° um X: Gerätesystem (Bildschirm-normal = +Z) -> Kamerasystem (Blick = −Z). */
-const Q1 = new Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
-
+const camera = new Quaternion();
 const forward = new Vector3();
-const candidate = new Quaternion();
 
 /**
- * Wandelt die Euler-Winkel des `deviceorientation`-Events in ein Quaternion,
- * das direkt auf die R3F-Kamera gelegt werden kann.
- *
- * Bewusst über Quaternionen statt Euler-Zuweisung: Beim Blick in den Zenit
- * (beta ≈ 90°) läuft eine naive Euler-Kette in den Gimbal Lock.
- *
- * Resultierendes Weltsystem: +Y = Zenit, −Z = Nord, +X = Ost.
+ * Eventtypen des AR-Modus. Android liefert den erdfesten Kompass über
+ * `deviceorientationabsolute` und den relativen Kreiselstrom über
+ * `deviceorientation`; iOS liefert alles über `deviceorientation` +
+ * `webkitCompassHeading`.
  */
-function orientationToQuaternion(
-  target: Quaternion,
-  alphaRad: number,
-  betaRad: number,
-  gammaRad: number,
-  screenAngleRad: number,
-): Quaternion {
-  EULER.set(betaRad, alphaRad, -gammaRad, 'YXZ');
-  target.setFromEuler(EULER);
-  target.multiply(Q1);
-  target.multiply(Q0.setFromAxisAngle(ZEE, -screenAngleRad));
-  return target;
+export const ORIENTATION_EVENT_TYPES = ['deviceorientationabsolute', 'deviceorientation'] as const;
+
+/**
+ * Hängt `handler` an beide Eventtypen (Capture-Phase); gibt die Abmeldung zurück.
+ * Die Option als Objekt statt `true`: Node (Prüfskript) wertet beim Abmelden nur
+ * `{ capture }` aus, Browser beides gleich.
+ */
+export function listenForOrientation(target: EventTarget, handler: (event: Event) => void): () => void {
+  const options = { capture: true };
+  for (const type of ORIENTATION_EVENT_TYPES) target.addEventListener(type, handler, options);
+  return () => {
+    for (const type of ORIENTATION_EVENT_TYPES) target.removeEventListener(type, handler, options);
+  };
+}
+
+/**
+ * Wandelt ein Orientierungs-Event in ein Sample der Kursfusion; `null`, wenn es
+ * keine Lage trägt (alle drei Winkel `null`: Gerät ohne Sensor).
+ *
+ * Rein und ohne Browser-Objekte, damit scripts/verify-orientation.ts die
+ * Umwandlung mit echten Event-Objekten prüfen kann. Zwei Fehler, die hier schon
+ * einmal steckten und die Fusion nicht bemerken kann: die Deklination nur auf
+ * erdfesten Events (iOS lag damit um die volle Deklination daneben) und eine
+ * verschluckte Genauigkeit (der WebKit-Platzhalter Kurs 0 bei Genauigkeit −1
+ * wurde dann zum Nordbezug).
+ */
+export function orientationSample(
+  event: Event,
+  timeMs: number,
+  declinationRad: number,
+): OrientationSample | null {
+  const e = event as IosDeviceOrientationEvent;
+  if (e.alpha === null && e.beta === null && e.gamma === null) return null;
+
+  const absolute = event.type === 'deviceorientationabsolute' || e.absolute === true;
+  const heading = e.webkitCompassHeading;
+  // Negativ heißt laut Apple „ungültige Richtung“.
+  const compass =
+    !absolute && typeof heading === 'number' && Number.isFinite(heading) && heading >= 0
+      ? heading
+      : null;
+  const accuracy =
+    typeof e.webkitCompassAccuracy === 'number' && Number.isFinite(e.webkitCompassAccuracy)
+      ? e.webkitCompassAccuracy
+      : null;
+
+  return {
+    timeMs,
+    stream: event.type,
+    alphaRad: (e.alpha ?? 0) * DEG,
+    betaRad: (e.beta ?? 0) * DEG,
+    gammaRad: (e.gamma ?? 0) * DEG,
+    absolute,
+    // iOS zählt den Kurs im Uhrzeigersinn; die Umrechnung auf alpha macht die Fusion.
+    compassHeadingRad: compass === null ? null : compass * DEG,
+    // Ungefiltert weitergereicht: Den WebKit-Platzhalter (Kurs 0 bei
+    // Genauigkeit −1) verwirft erst die Fusion.
+    compassAccuracyDeg: compass === null ? null : accuracy,
+    // Beide Quellen sind magnetisch: Android `deviceorientationabsolute` und
+    // iOS `webkitCompassHeading` = `CLHeading.magneticHeading`
+    // (WebKit, Source/WebCore/platform/ios/WebCoreMotionManager.mm, Z. 318;
+    // `trueHeading` kommt dort nicht vor). Also auf jedem Event.
+    declinationRad,
+  };
+}
+
+/**
+ * Deklination am Standort in Radiant, Ost positiv. Rechnet nur neu, wenn sich
+ * das Standortobjekt ändert – `observer` im Store wechselt erst ab 200 m.
+ */
+export function createDeclinationReader(
+  observer: () => GeoCoord | null,
+  now: () => Date = () => new Date(),
+): () => number {
+  let cachedObserver: GeoCoord | null = null;
+  let declinationRad = 0;
+  return () => {
+    const current = observer();
+    if (current !== cachedObserver) {
+      cachedObserver = current;
+      // Ohne Standort bleibt der magnetische Kurs unkorrigiert; das ist kein
+      // Fehlerzustand, nur einige Grad ungenauer.
+      declinationRad = current
+        ? magneticDeclinationDeg(
+            current.latitudeDeg,
+            current.longitudeDeg,
+            current.altitudeKm,
+            decimalYear(now()),
+          ) * DEG
+        : 0;
+    }
+    return declinationRad;
+  };
+}
+
+export interface OrientationHandlerOptions {
+  /** Ziel der Kameralage; im Betrieb `orientationState`. */
+  state: OrientationState;
+  /** Monotone Zeit in ms. */
+  now: () => number;
+  declinationRad: () => number;
+  screenAngleRad: () => number;
+  publishStatus: (status: CompassStatus) => void;
+}
+
+/**
+ * Verarbeitet die Orientierungs-Events des AR-Modus: Sample bilden,
+ * fusionieren, Kompassstatus melden, Kameralage in `state` schreiben. Ohne
+ * React und ohne globale Browser-Objekte (alles über `options`), damit die
+ * Kette Event → Kamera ohne Browser prüfbar ist.
+ */
+export function createOrientationHandler(options: OrientationHandlerOptions): (event: Event) => void {
+  const { state } = options;
+  const fusion = new HeadingFusion();
+  state.accuracyDeg = null;
+
+  return (event: Event) => {
+    const sample = orientationSample(event, options.now(), options.declinationRad());
+    if (sample === null) return;
+    if (sample.compassHeadingRad !== null) state.accuracyDeg = sample.compassAccuracyDeg ?? null;
+    if (!fusion.push(sample)) return;
+
+    // Der Status hängt am Nordbezug der Fusion, nicht am einzelnen Event:
+    // Fehlt iOS in einem Event der Kompasswert, gilt der letzte weiter.
+    const lastAccuracy = state.accuracyDeg;
+    const poor =
+      lastAccuracy !== null && (lastAccuracy < 0 || lastAccuracy > MAX_COMPASS_ACCURACY_DEG);
+    options.publishStatus(!fusion.referenced ? 'relative' : poor ? 'calibrating' : 'ok');
+
+    const screenAngle = options.screenAngleRad();
+    attitudeToCamera(camera, fusion.attitude, screenAngle);
+    clampPitch(camera, AR_MIN_ELEVATION);
+    forward.set(0, 0, -1).applyQuaternion(camera);
+
+    state.quaternion.copy(camera);
+    state.screenAngle = screenAngle;
+    state.headingDeg = normalizeAngle(Math.atan2(forward.x, -forward.z)) * RAD;
+    state.available = true;
+  };
 }
 
 function readScreenAngle(): number {
@@ -95,91 +209,18 @@ export function useDeviceOrientation(): DeviceOrientationApi {
       return;
     }
 
-    // Zirkulärer Tiefpass auf den Kurs: gemittelt wird über sin/cos, damit der
-    // Sprung zwischen 359° und 0° keinen Ausreißer erzeugt.
-    let headingSin = 0;
-    let headingCos = 0;
-    let headingReady = false;
-    let sawAbsolute = false;
-    let lastSampleMs = 0;
-
-    const publishStatus = (status: CompassStatus) => {
-      if (statusRef.current === status) return;
-      statusRef.current = status;
-      setCompassStatus(status);
-    };
-
-    const handleOrientation = (event: Event) => {
-      const e = event as IosDeviceOrientationEvent;
-      if (e.alpha === null && e.beta === null && e.gamma === null) return;
-
-      const isAbsolute = event.type === 'deviceorientationabsolute' || e.absolute === true;
-      const iosHeading = typeof e.webkitCompassHeading === 'number' ? e.webkitCompassHeading : null;
-
-      if (isAbsolute) sawAbsolute = true;
-      // Relative Events verwerfen, sobald eine erdfeste Quelle liefert – sonst
-      // überschreibt der driftende Kreiselkurs den kalibrierten Kompasskurs.
-      else if (sawAbsolute && iosHeading === null) return;
-
-      const accuracy = e.webkitCompassAccuracy;
-      if (iosHeading !== null) {
-        const poor =
-          typeof accuracy === 'number' && (accuracy < 0 || accuracy > MAX_COMPASS_ACCURACY_DEG);
-        orientationState.accuracyDeg = typeof accuracy === 'number' ? accuracy : null;
-        publishStatus(poor ? 'calibrating' : 'ok');
-      } else {
-        orientationState.accuracyDeg = null;
-        publishStatus(isAbsolute ? 'ok' : 'relative');
-      }
-
-      // iOS zählt den Kurs im Uhrzeigersinn, `alpha` läuft entgegengesetzt.
-      const headingRad =
-        iosHeading !== null ? ((360 - iosHeading) % 360) * DEG : (e.alpha ?? 0) * DEG;
-      const betaRad = (e.beta ?? 0) * DEG;
-      const gammaRad = (e.gamma ?? 0) * DEG;
-      const screenAngle = readScreenAngle();
-      const previousHeading = headingReady ? Math.atan2(headingSin, headingCos) : headingRad;
-
-      const now = performance.now();
-      const dt = lastSampleMs > 0 ? Math.min(0.2, (now - lastSampleMs) / 1000) : 1 / 60;
-      lastSampleMs = now;
-
-      // Liegt das Gerät flach, ist der Azimut mathematisch entartet und springt
-      // wild – in diesem Bereich wird der zuletzt stabile Kurs gehalten.
-      orientationToQuaternion(candidate, previousHeading, betaRad, gammaRad, screenAngle);
-      forward.set(0, 0, -1).applyQuaternion(candidate);
-      const nearVertical = Math.abs(forward.y) > NEAR_VERTICAL;
-
-      if (!headingReady) {
-        headingSin = Math.sin(headingRad);
-        headingCos = Math.cos(headingRad);
-        headingReady = true;
-      } else if (!nearVertical) {
-        // Adaptiv über den Regelfehler: Rauschen wird stark gedämpft, bewusste
-        // Drehungen öffnen den Filter. Auf die reale Ereignisrate normiert,
-        // da Android häufig nur 15–30 Hz liefert.
-        const step = Math.abs(angleDelta(headingRad, previousHeading));
-        const gain60 = clamp(HEADING_GAIN_MIN + step * HEADING_GAIN_SLOPE, HEADING_GAIN_MIN, 0.6);
-        const k = 1 - Math.pow(1 - gain60, dt * 60);
-
-        headingSin += (Math.sin(headingRad) - headingSin) * k;
-        headingCos += (Math.cos(headingRad) - headingCos) * k;
-      }
-
-      const smoothedHeading = Math.atan2(headingSin, headingCos);
-      orientationToQuaternion(candidate, smoothedHeading, betaRad, gammaRad, screenAngle);
-      clampPitch(candidate, AR_MIN_ELEVATION);
-
-      orientationState.quaternion.copy(candidate);
-      orientationState.screenAngle = screenAngle;
-      orientationState.headingDeg = normalizeAngle(-smoothedHeading) * RAD;
-      orientationState.available = true;
-    };
-
-    // Android liefert den erdfesten Kompass über `deviceorientationabsolute`,
-    // iOS ausschließlich über `deviceorientation` + `webkitCompassHeading`.
-    window.addEventListener('deviceorientationabsolute', handleOrientation, true);
-    window.addEventListener('deviceorientation', handleOrientation, true);
+    const handleOrientation = createOrientationHandler({
+      state: orientationState,
+      now: () => performance.now(),
+      declinationRad: createDeclinationReader(() => useAppStore.getState().observer),
+      screenAngleRad: readScreenAngle,
+      publishStatus: (status) => {
+        if (statusRef.current === status) return;
+        statusRef.current = status;
+        setCompassStatus(status);
+      },
+    });
+    const stopListening = listenForOrientation(window, handleOrientation);
 
     const timeout = window.setTimeout(() => {
       if (!orientationState.available) {
@@ -189,8 +230,7 @@ export function useDeviceOrientation(): DeviceOrientationApi {
 
     return () => {
       window.clearTimeout(timeout);
-      window.removeEventListener('deviceorientationabsolute', handleOrientation, true);
-      window.removeEventListener('deviceorientation', handleOrientation, true);
+      stopListening();
       orientationState.available = false;
     };
   }, [arEnabled, pushError, setCompassStatus]);
