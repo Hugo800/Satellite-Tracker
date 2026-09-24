@@ -83,6 +83,14 @@ export interface PassPrediction {
   tca: number;
   /** Loss of Signal – Untergang (ms seit Epoch). */
   los: number;
+  /**
+   * true, wenn der Überflug schon lief und die Rückwärtssuche keinen Aufgang
+   * fand (dauerhaft über dem Horizont, etwa geostationär). `aos` ist dann nur
+   * der früheste bestätigte Punkt über dem Horizont, kein Aufgang.
+   */
+  aosOpen: boolean;
+  /** Gegenstück für den Untergang: jenseits des Suchfensters, `los` nur der letzte bestätigte Punkt. */
+  losOpen: boolean;
   /** Maximale Elevation in Grad. */
   maxElevationDeg: number;
   aosAzimuthDeg: number;

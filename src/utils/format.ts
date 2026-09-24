@@ -40,6 +40,26 @@ export function formatCountdown(targetMs: number, nowMs: number = Date.now()): s
   return `in ${seconds} s`;
 }
 
+/**
+ * Restzeit bis `endMs` für einen Überflug, der gerade läuft: „noch 45 s“,
+ * „noch 7 min“, ab einer Stunde „noch 5:12 h“.
+ *
+ * Die Angabe steht rechts neben „Überflüge · nächste 48 h“, und der Platz
+ * dort ist knapp. Gemessen (headless Chrome 153, Systemschrift, 24.09.2026):
+ * Bei 375 pt Bildschirmbreite bleiben 115 px frei. „läuft · noch 10 h 59 min“
+ * bräuchte 128 px und bräche die Kopfzeile um, „läuft · noch 10:59 h“ braucht
+ * 106 px, „läuft · noch 59 min“ 100 px. Deshalb ohne Sekunden und ab einer
+ * Stunde als h:mm. Mehr als 49 h können es nicht werden, so weit reicht die
+ * Suche nicht. Minuten aufgerundet: „noch 1 min“ heißt „höchstens eine“.
+ */
+export function formatRemaining(endMs: number, nowMs: number = Date.now()): string {
+  const diff = Math.max(0, Math.round((endMs - nowMs) / 1000));
+  if (diff < 60) return `noch ${diff} s`;
+  const minutes = Math.ceil(diff / 60);
+  if (minutes < 60) return `noch ${minutes} min`;
+  return `noch ${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')} h`;
+}
+
 export function formatDurationSec(seconds: number): string {
   // Erst runden, dann aufteilen – sonst entsteht durch zwei getrennte
   // Rundungen eine Ausgabe wie „1 min 60 s“.

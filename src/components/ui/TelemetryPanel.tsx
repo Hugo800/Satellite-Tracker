@@ -9,6 +9,7 @@ import {
   formatDay,
   formatDurationSec,
   formatNumber,
+  formatRemaining,
 } from '../../utils/format';
 import type { PassPrediction } from '../../types';
 
@@ -44,12 +45,21 @@ function LiveField({
  *
  * Maßgeblich ist das sonnenbeschienene Fenster: Nur darin ist der Satellit
  * überhaupt am Himmel zu sehen – der Rest des Bogens liegt im Erdschatten.
+ *
+ * Ein laufender Überflug zeigt „läuft“ statt des Datums und einen Rahmen in
+ * der Akzentfarbe des Countdowns. Die Angaben bleiben die des ganzen Bogens,
+ * auch wenn ein Teil davon schon vorbei ist.
  */
-function PassRow({ pass }: { pass: PassPrediction }): React.JSX.Element {
+function PassRow({ pass, running }: { pass: PassPrediction; running: boolean }): React.JSX.Element {
   const sunlit = pass.sunlitSec > 0 && pass.sunlitStart !== null;
   const startMs = sunlit ? (pass.sunlitStart as number) : pass.aos;
   const endMs = sunlit ? (pass.sunlitEnd as number) : pass.los;
   const seconds = sunlit ? pass.sunlitSec : pass.durationSec;
+  // Offene Enden (dauerhaft über dem Horizont, etwa geostationär): Die Zeit
+  // dort ist nur die Grenze der Suche, kein Auf- oder Untergang – statt einer
+  // Uhrzeit steht „…“, und die Dauer ist nur eine Untergrenze.
+  const openStart = pass.aosOpen && startMs <= pass.aos;
+  const openEnd = pass.losOpen && endMs >= pass.los;
 
   const badge = !sunlit
     ? { text: 'Erdschatten', color: 'var(--label-2)' }
@@ -58,11 +68,22 @@ function PassRow({ pass }: { pass: PassPrediction }): React.JSX.Element {
       : { text: 'nur optisch', color: 'var(--accent)' };
 
   return (
-    <li className="rounded-[var(--radius-sm)] px-2.5 py-2" style={{ background: 'var(--fill)' }}>
+    <li
+      className="rounded-[var(--radius-sm)] px-2.5 py-2"
+      style={{
+        background: 'var(--fill)',
+        // Als Schatten nach innen: Die Zeile wird dadurch keinen Pixel größer.
+        boxShadow: running ? 'inset 0 0 0 1.5px var(--accent)' : undefined,
+      }}
+    >
       <div className="flex items-baseline gap-1.5">
-        <span className="text-[11px] text-label-2">{formatDay(startMs)}</span>
+        {running ? (
+          <span className="text-[11px] font-semibold text-accent">läuft</span>
+        ) : (
+          <span className="text-[11px] text-label-2">{formatDay(startMs)}</span>
+        )}
         <span className="text-[13px] font-semibold text-label">
-          {formatClockShort(startMs)} – {formatClockShort(endMs)}
+          {openStart ? '…' : formatClockShort(startMs)} – {openEnd ? '…' : formatClockShort(endMs)}
         </span>
         <span
           className="ml-auto rounded-full px-2 py-0.5 text-[10px] font-semibold"
@@ -75,7 +96,10 @@ function PassRow({ pass }: { pass: PassPrediction }): React.JSX.Element {
         </span>
       </div>
       <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-label-2">
-        <span>{formatDurationSec(seconds)}</span>
+        <span>
+          {openStart || openEnd ? '≥ ' : ''}
+          {formatDurationSec(seconds)}
+        </span>
         <span>· max. {formatNumber(pass.maxElevationDeg, 0)}°</span>
         <span>
           · {formatNumber(pass.aosAzimuthDeg, 0)}° {compassLabel(pass.aosAzimuthDeg)} →{' '}
@@ -154,18 +178,33 @@ export function TelemetryPanel(): React.JSX.Element | null {
     return () => cancelAnimationFrame(frame);
   }, [selectedIndex, expanded]);
 
-  const nextPass = passes.length > 0 ? passes[0] : null;
+  // Aufgang des Überflugs, der gerade läuft. Das ändert sich nur an Auf- und
+  // Untergängen – die Liste rendert deshalb nur dann neu, nicht im Sekundentakt.
+  const [runningAos, setRunningAos] = useState<number | null>(null);
   useEffect(() => {
-    if (!nextPass) return;
+    if (passes.length === 0) return;
     const write = () => {
-      if (countdownRef.current) {
-        countdownRef.current.textContent = formatCountdown(nextPass.sunlitStart ?? nextPass.aos);
+      const now = Date.now();
+      // Der erste Eintrag, der noch nicht vorbei ist: Bleibt die Karte über
+      // einen Untergang hinaus offen, rückt der Countdown zum nächsten weiter.
+      const current = passes.find((p) => p.los > now);
+      const running = current !== undefined && current.aos <= now;
+      setRunningAos(running ? current.aos : null);
+      if (!countdownRef.current) return;
+      if (!current) {
+        countdownRef.current.textContent = '–';
+      } else if (running) {
+        countdownRef.current.textContent = `läuft · ${
+          current.losOpen ? 'Ende offen' : formatRemaining(current.los, now)
+        }`;
+      } else {
+        countdownRef.current.textContent = formatCountdown(current.sunlitStart ?? current.aos, now);
       }
     };
     write();
     const id = window.setInterval(write, 1000);
     return () => window.clearInterval(id);
-  }, [nextPass]);
+  }, [passes]);
 
   if (selectedIndex === null) return null;
   void catalogVersion;
@@ -321,7 +360,7 @@ export function TelemetryPanel(): React.JSX.Element | null {
             {!passPending && passes.length > 0 && (
               <ul className="no-scrollbar max-h-56 space-y-1.5 overflow-y-auto overscroll-contain pr-0.5">
                 {passes.map((p) => (
-                  <PassRow key={p.aos} pass={p} />
+                  <PassRow key={p.aos} pass={p} running={p.aos === runningAos} />
                 ))}
               </ul>
             )}

@@ -207,19 +207,41 @@ function analyseBrightness(
 
   const result = { ...empty };
   const steps = Math.max(2, Math.ceil((los - aos) / BRIGHTNESS_STEP_MS));
+  // Zeitpunkt der vorigen Abtastung, falls sie beschienen war – sonst `null`.
+  let previousSunlitMs: number | null = null;
 
   for (let i = 0; i <= steps; i += 1) {
     const ms = aos + ((los - aos) * i) / steps;
     const found = lookAt(satrec, ms, observer);
-    if (!found) continue;
+    if (!found) {
+      previousSunlitMs = null;
+      continue;
+    }
 
     const date = new Date(ms);
     const sunUnit = sunEciUnitVector(date);
     const position = found.position as Vec3;
-    if (isEclipsed(position, sunUnit)) continue;
+    if (isEclipsed(position, sunUnit)) {
+      previousSunlitMs = null;
+      continue;
+    }
 
     if (result.sunlitStart === null) result.sunlitStart = ms;
     result.sunlitEnd = ms;
+
+    // Die beschienene Zeit ist die Summe der Abtastschritte, die an beiden
+    // Enden beschienen sind – nicht `sunlitEnd − sunlitStart`. Das beschienene
+    // Stück muss nicht zusammenhängen: Bei hohen Bahnen tritt der Satellit
+    // mitten im Bogen in den Erdschatten und wieder heraus, und die Differenz
+    // zählte die Schattenzeit mit. scripts/verify-passes.ts belegt das für
+    // BEIDOU-3 M16 in der Nacht zum 20.12.2026 (53 min Schatten im Bogen)
+    // und für METEOSAT-11 zur Tag-und-Nacht-Gleiche (rund eine Stunde je
+    // Nacht). Hängt das Stück zusammen, ergibt die Summe bis auf Rundung
+    // (höchstens 1,3e-9 s) die Differenz wie bisher – dort für jeden
+    // zusammenhängend beschienenen Überflug
+    // nachgeprüft.
+    if (previousSunlitMs !== null) result.sunlitSec += (ms - previousSunlitMs) / 1000;
+    previousSunlitMs = ms;
 
     const phase = phaseAngle(position, observerEciPosition(observer, date), sunUnit);
     const magnitude = apparentMagnitude(
@@ -243,15 +265,171 @@ function analyseBrightness(
     }
   }
 
-  if (result.sunlitStart !== null && result.sunlitEnd !== null) {
-    result.sunlitSec = Math.max(0, (result.sunlitEnd - result.sunlitStart) / 1000);
-  }
   return result;
+}
+
+/** Feinschritt, mit dem ein gefundener Bogen bis zum Untergang verfolgt wird. */
+const TRACE_STEP_MS = 10_000;
+
+/**
+ * Wie weit die Suche nach dem Aufgang eines schon laufenden Überflugs
+ * höchstens zurückreicht.
+ *
+ * Ohne Grenze endete sie bei Objekten nie, die dauerhaft über dem Horizont
+ * stehen – geostationär oder geosynchron, von Mitteleuropa aus etwa
+ * METEOSAT-11. 24 h sind länger als ein voller Umlauf jeder Bahn bis zur
+ * geosynchronen (23,93 h) und mehr als das Doppelte des längsten endlichen
+ * Überflugs in scripts/verify-passes.ts (MERIDIAN 7, Molnija-Bahn: 10,4 h).
+ * Wer länger ununterbrochen über dem Horizont steht, hat keinen Aufgang, den
+ * man sinnvoll angeben könnte; der Überflug wird dann mit offenem Anfang
+ * gemeldet (`aosOpen`, siehe `findRunningStart`).
+ */
+const MAX_LOOKBACK_MS = 24 * 3600_000;
+
+interface Arc {
+  tca: number;
+  /** Höchste Elevation im Bogen, Radiant. */
+  maxEl: number;
+  los: number;
+  losOpen: boolean;
+  /** Erster Abtastpunkt hinter dem Bogen – dort geht die Suche weiter, wenn er zu niedrig war. */
+  nextMs: number;
+  nextEl: number;
+}
+
+/**
+ * Verfolgt einen Bogen von einem Punkt über dem Horizont bis zum Untergang und
+ * merkt sich dabei den Höchststand. Liefert `null`, wenn der Propagator
+ * unterwegs versagt.
+ */
+function traceArc(
+  satrec: SatRec,
+  observer: ObserverGd,
+  startMs: number,
+  startEl: number,
+  endMs: number,
+): Arc | null {
+  let maxEl = -Math.PI;
+  let tca = startMs;
+  let los = -1;
+  let lastAbove = startMs;
+  let scanEl = startEl;
+  let scanMs = startMs;
+
+  while (scanMs <= endMs + 3600_000) {
+    if (scanEl > maxEl) {
+      maxEl = scanEl;
+      tca = scanMs;
+    }
+    if (scanEl <= 0) {
+      los = refineHorizonCrossing(satrec, observer, scanMs, lastAbove);
+      break;
+    }
+    lastAbove = scanMs;
+    scanMs += TRACE_STEP_MS;
+    scanEl = elevationAt(satrec, new Date(scanMs), observer);
+    if (Number.isNaN(scanEl)) return null;
+  }
+
+  // Stark exzentrische Bahnen bleiben länger über dem Horizont, als das
+  // Suchfenster reicht. Dann begrenzt der letzte bestätigte Punkt oberhalb
+  // des Horizonts den Überflug – sonst meldete die Vorhersage 0 s Dauer.
+  const losOpen = los < 0;
+  if (losOpen) los = lastAbove;
+  return { tca, maxEl, los, losOpen, nextMs: scanMs, nextEl: scanEl };
+}
+
+interface RunningStart {
+  aos: number;
+  aosOpen: boolean;
+  /** Frühester Abtastpunkt über dem Horizont – dort beginnt die Verfolgung des Bogens. */
+  firstAboveMs: number;
+  firstAboveEl: number;
+}
+
+/**
+ * Sucht vom Zeitpunkt `fromMs` aus, an dem der Satellit schon über dem
+ * Horizont steht, rückwärts nach dem Aufgang: im Grobraster bis zum ersten
+ * Punkt unter dem Horizont, dann per Bisektion wie beim regulären Aufgang.
+ *
+ * Endet die Suche an `MAX_LOOKBACK_MS`, ohne den Horizont zu kreuzen, ist der
+ * Aufgang unbekannt. Gemeldet wird der Überflug trotzdem – er ist ja gerade
+ * zu sehen, und genau dann öffnet man die App –, aber mit `aosOpen`: `aos`
+ * ist dann nur der früheste bestätigte Punkt über dem Horizont, kein
+ * Aufgang. Ein erfundener Aufgang wäre falsch, ein weggelassener Überflug
+ * wäre der Fehler, den diese Suche behebt. Dasselbe gilt, wenn der Propagator
+ * rückwärts versagt.
+ */
+function findRunningStart(
+  satrec: SatRec,
+  observer: ObserverGd,
+  fromMs: number,
+  fromEl: number,
+  stepMs: number,
+): RunningStart {
+  const limitMs = fromMs - MAX_LOOKBACK_MS;
+  let aboveMs = fromMs;
+  let aboveEl = fromEl;
+
+  while (aboveMs - stepMs >= limitMs) {
+    const t = aboveMs - stepMs;
+    const el = elevationAt(satrec, new Date(t), observer);
+    if (Number.isNaN(el)) break;
+    if (el <= 0) {
+      return {
+        aos: refineHorizonCrossing(satrec, observer, t, aboveMs),
+        aosOpen: false,
+        firstAboveMs: aboveMs,
+        firstAboveEl: aboveEl,
+      };
+    }
+    aboveMs = t;
+    aboveEl = el;
+  }
+
+  return { aos: aboveMs, aosOpen: true, firstAboveMs: aboveMs, firstAboveEl: aboveEl };
+}
+
+function buildPass(
+  satrec: SatRec,
+  observer: ObserverGd,
+  aos: number,
+  aosOpen: boolean,
+  arc: Arc,
+  standardMagnitude: number | undefined,
+): PassPrediction {
+  const aosLook = lookAt(satrec, aos, observer);
+  const losLook = lookAt(satrec, arc.los, observer);
+  // Die Helligkeit gilt wie Höchststand und Dauer für den ganzen Bogen, auch
+  // für den schon vergangenen Teil eines laufenden Überflugs. Ein Eintrag
+  // beschreibt damit denselben Überflug, egal wann er berechnet wurde; was
+  // davon noch bevorsteht, zeigen das Zeitfenster und der Countdown.
+  const brightness = analyseBrightness(satrec, observer, aos, arc.los, standardMagnitude);
+
+  return {
+    aos,
+    tca: arc.tca,
+    los: arc.los,
+    aosOpen,
+    losOpen: arc.losOpen,
+    maxElevationDeg: arc.maxEl * RAD,
+    aosAzimuthDeg: aosLook ? normalizeAngle(aosLook.look.azimuth) * RAD : 0,
+    losAzimuthDeg: losLook ? normalizeAngle(losLook.look.azimuth) * RAD : 0,
+    durationSec: Math.max(0, (arc.los - aos) / 1000),
+    ...brightness,
+  };
 }
 
 /**
  * Sucht den nächsten Überflug (AOS / TCA / LOS) eines Satelliten über dem Beobachter.
  * Grobraster + Bisektion; für sonnensynchrone LEO-Objekte typisch < 15 ms Rechenzeit.
+ *
+ * Steht der Satellit bei `fromMs` schon über dem Horizont, ist der laufende
+ * Überflug das Ergebnis, sofern er die Mindesthöhe erreicht – sonst wird er
+ * übergangen wie jeder zu flache Bogen. Aufgang per Rückwärtssuche, Höchststand und
+ * Helligkeit über den ganzen Bogen – der Höchststand kann schon vorbei sein.
+ * Früher erkannte die Suche einen Überflug nur an seinem Aufgang und
+ * übersprang deshalb genau den, der gerade am Himmel stand.
  */
 export function predictNextPass(
   satrec: SatRec,
@@ -266,6 +444,19 @@ export function predictNextPass(
   let prevEl = elevationAt(satrec, new Date(prevMs), observer);
   if (Number.isNaN(prevEl)) return null;
 
+  if (prevEl > 0) {
+    const start = findRunningStart(satrec, observer, prevMs, prevEl, stepMs);
+    const arc = traceArc(satrec, observer, start.firstAboveMs, start.firstAboveEl, endMs);
+    if (!arc) return null;
+    if (arc.maxEl >= minEl) {
+      return buildPass(satrec, observer, start.aos, start.aosOpen, arc, options.standardMagnitude);
+    }
+    // Zu niedrig – wie einen zu niedrigen regulären Überflug übergehen und
+    // hinter seinem Untergang weitersuchen.
+    prevMs = arc.nextMs;
+    prevEl = arc.nextEl;
+  }
+
   for (let t = prevMs + stepMs; t <= endMs; t += stepMs) {
     const el = elevationAt(satrec, new Date(t), observer);
     if (Number.isNaN(el)) return null;
@@ -278,57 +469,17 @@ export function predictNextPass(
     }
 
     const aos = refineHorizonCrossing(satrec, observer, prevMs, t);
+    const arc = traceArc(satrec, observer, t, el, endMs);
+    if (!arc) return null;
 
-    // Höchststand + Untergang verfolgen.
-    let maxEl = -Math.PI;
-    let tca = aos;
-    let los = -1;
-    let lastAbove = aos;
-    let scanEl = el;
-    let scanMs = t;
-    const fineStep = 10_000;
-
-    while (scanMs <= endMs + 3600_000) {
-      if (scanEl > maxEl) {
-        maxEl = scanEl;
-        tca = scanMs;
-      }
-      if (scanEl <= 0) {
-        los = refineHorizonCrossing(satrec, observer, scanMs, lastAbove);
-        break;
-      }
-      lastAbove = scanMs;
-      scanMs += fineStep;
-      scanEl = elevationAt(satrec, new Date(scanMs), observer);
-      if (Number.isNaN(scanEl)) return null;
-    }
-
-    // Stark exzentrische Bahnen bleiben länger über dem Horizont, als das
-    // Suchfenster reicht. Dann begrenzt der letzte bestätigte Punkt oberhalb
-    // des Horizonts den Überflug – sonst meldete die Vorhersage 0 s Dauer.
-    if (los < 0) los = lastAbove;
-
-    if (maxEl < minEl) {
-      prevEl = scanEl;
-      prevMs = scanMs;
-      t = scanMs;
+    if (arc.maxEl < minEl) {
+      prevEl = arc.nextEl;
+      prevMs = arc.nextMs;
+      t = arc.nextMs;
       continue;
     }
 
-    const aosLook = lookAt(satrec, aos, observer);
-    const losLook = lookAt(satrec, los, observer);
-    const brightness = analyseBrightness(satrec, observer, aos, los, options.standardMagnitude);
-
-    return {
-      aos,
-      tca,
-      los,
-      maxElevationDeg: maxEl * RAD,
-      aosAzimuthDeg: aosLook ? normalizeAngle(aosLook.look.azimuth) * RAD : 0,
-      losAzimuthDeg: losLook ? normalizeAngle(losLook.look.azimuth) * RAD : 0,
-      durationSec: Math.max(0, (los - aos) / 1000),
-      ...brightness,
-    };
+    return buildPass(satrec, observer, aos, false, arc, options.standardMagnitude);
   }
 
   return null;
@@ -356,7 +507,12 @@ export function predictPasses(
     });
     if (!pass) break;
     passes.push(pass);
-    // Etwas Abstand hinter den Untergang, damit derselbe Überflug nicht erneut anschlägt.
+    // Etwas Abstand hinter den Untergang, damit derselbe Überflug nicht erneut
+    // anschlägt. Seit `predictNextPass` auch laufende Überflüge meldet, hängt
+    // daran mehr: Stünde der Cursor noch im Bogen, fände dessen Rückwärtssuche
+    // denselben Aufgang ein zweites Mal. scripts/verify-passes.ts prüft für
+    // jeden Überflug der Testfälle, dass die Elevation am neuen Cursor negativ
+    // ist und kein Überflug doppelt erscheint.
     cursor = pass.los + 60_000;
   }
 
