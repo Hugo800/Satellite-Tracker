@@ -12,11 +12,17 @@ import {
 import { passesSkyFilter } from '../../math/visibility';
 import { catalogIndex, telemetry } from '../../state/runtime';
 import { useAppStore } from '../../state/store';
+import { registerTapListeners, type TapEventSource, type TapPointerEvent } from './tapTracker';
 
-const TAP_MOVE_TOLERANCE_PX = 12;
-const TAP_DURATION_MS = 450;
 /** Winkeltoleranz bei 70° FOV – skaliert mit dem Zoom, damit Treffer fair bleiben. */
 const BASE_PICK_ANGLE_DEG = 3.2;
+
+/** Erlaubt Aufrufe ohne echtes window (z. B. scripts/verify-selection.ts, dessen
+ * gestelltes `window` kein addEventListener besitzt) ohne Zweig im Effekt selbst. */
+const NOOP_EVENT_SOURCE: TapEventSource = {
+  addEventListener: () => {},
+  removeEventListener: () => {},
+};
 
 const raycaster = new Raycaster();
 const ndc = new Vector2();
@@ -40,25 +46,11 @@ export function TapPicker(): null {
 
   useEffect(() => {
     const element = gl.domElement;
-    let startX = 0;
-    let startY = 0;
-    let startTime = 0;
-    let pointerCount = 0;
 
-    const onPointerDown = (e: PointerEvent) => {
-      pointerCount += 1;
-      startX = e.clientX;
-      startY = e.clientY;
-      startTime = performance.now();
-    };
-
-    const onPointerUp = (e: PointerEvent) => {
-      const wasMultiTouch = pointerCount > 1;
-      pointerCount = Math.max(0, pointerCount - 1);
-      if (wasMultiTouch) return;
-      if (performance.now() - startTime > TAP_DURATION_MS) return;
-      if (Math.hypot(e.clientX - startX, e.clientY - startY) > TAP_MOVE_TOLERANCE_PX) return;
-
+    // Trifft den Sehstrahl im Moment des Tap-Endes gegen alle sichtbaren Satelliten.
+    // Bekommt von registerTapListeners nur die Feldwerte, die dafür nötig sind – die
+    // Entscheidung "war das überhaupt ein Tap" liegt vollständig in tapTracker.ts.
+    const handleTap = (e: TapPointerEvent) => {
       const rect = element.getBoundingClientRect();
       ndc.set(
         ((e.clientX - rect.left) / rect.width) * 2 - 1,
@@ -113,19 +105,15 @@ export function TapPicker(): null {
       select(bestIndex >= 0 ? (catalogIndex.meta[bestIndex]?.noradId ?? null) : null);
     };
 
-    const onPointerCancel = () => {
-      pointerCount = Math.max(0, pointerCount - 1);
-    };
+    // Testattrappen (scripts/verify-selection.ts) stellen ein `window` ohne
+    // addEventListener bereit – registerTapListeners bekommt dafür eine Quelle, die
+    // sich anmelden lässt, aber nichts tut, statt im Effekt selbst zu verzweigen.
+    const windowSource: TapEventSource =
+      typeof window !== 'undefined' && typeof window.addEventListener === 'function'
+        ? window
+        : NOOP_EVENT_SOURCE;
 
-    element.addEventListener('pointerdown', onPointerDown);
-    element.addEventListener('pointerup', onPointerUp);
-    element.addEventListener('pointercancel', onPointerCancel);
-
-    return () => {
-      element.removeEventListener('pointerdown', onPointerDown);
-      element.removeEventListener('pointerup', onPointerUp);
-      element.removeEventListener('pointercancel', onPointerCancel);
-    };
+    return registerTapListeners(element, windowSource, handleTap);
   }, [camera, gl, select]);
 
   return null;
