@@ -99,6 +99,8 @@ function makeBuckets(): { list: Bucket[]; capacity: number } {
 export function RadarMap(): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const mode = useAppStore((s) => s.filters.mode);
+  // Platz, nicht NORAD-ID: Die Zeichenschleife vergleicht je Objekt nur
+  // Zahlen (`i === selected`). -1 (ID nicht im Katalog) trifft keinen Platz.
   const selectedIndex = useAppStore((s) => s.selectedIndex);
   const scheme = useResolvedTheme();
 

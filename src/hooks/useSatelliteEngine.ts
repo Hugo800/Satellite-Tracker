@@ -4,6 +4,7 @@ import { TELEMETRY_STRIDE } from '../math/telemetryLayout';
 import { catalogIndex, ensureTelemetryCapacity, telemetry, trailState } from '../state/runtime';
 import { useAppStore } from '../state/store';
 import type {
+  NoradId,
   SatelliteGroup,
   SatelliteMeta,
   TimeBase,
@@ -23,8 +24,11 @@ import type {
  *
  * Der Katalog wird deshalb per Modulo auf mehrere Worker verteilt –
  * `index % shardCount === shardIndex`. Die Zuteilung ist rein rechnerisch:
- * Wächst der Katalog, bleiben alle bisherigen Indizes (und damit Auswahl,
- * Bahnspur und Überflugliste) unverändert gültig.
+ * Wächst der Katalog, bleiben alle bisherigen Plätze unverändert gültig.
+ *
+ * Auswahl, Bahnspur und Überflugliste hängen trotzdem nicht am Platz, sondern
+ * an der NORAD-ID: Ein neu aufgebauter Pool vergibt die Plätze nach
+ * Ladereihenfolge und -erfolg neu (scripts/verify-selection.ts, Abschnitt F).
  */
 
 function pickShardCount(): number {
@@ -67,16 +71,43 @@ function sendTo(shard: number, message: WorkerRequest, transfer?: Transferable[]
   pool?.workers[shard]?.postMessage(message, transfer ?? []);
 }
 
-/** Shard, der den globalen Index besitzt. */
-const shardOf = (index: number): number => (pool ? index % pool.shardCount : 0);
+/** Shard, der den Platz besitzt. */
+const shardOf = (slot: number): number => (pool ? slot % pool.shardCount : 0);
+
+/**
+ * Schickt eine Anfrage für ein Objekt an den Shard, der es rechnet.
+ *
+ * Aus einer NORAD-ID lässt sich der Shard nicht berechnen, nur aus dem Platz.
+ * Den liefert die ID→Platz-Map des Main-Threads (`catalogIndex.slotById`) –
+ * dieselbe, über die Karte, Ring und Radar die Auswahl auflösen. Ein Rundruf
+ * an alle Shards ginge auch, fremde Shards verwürfen die Nachricht. Er hilft
+ * aber nicht bei dem Fall, der ohnehin eine eigene Behandlung braucht: Eine
+ * ID, die noch nicht im Katalog steht, bekäme auch per Rundruf keine Antwort.
+ * Also gilt: Solange die Map die ID nicht kennt, geht nichts raus, und die
+ * Anfrage folgt, sobald sie aufgelöst ist (Effekt unten, OrbitTrail). So
+ * gibt es genau einen Moment, in dem ein Objekt als „im Katalog“ gilt, und
+ * eine Überflugsuche je Auswahl und Bahnsatz.
+ *
+ * Die Nachricht trägt die ID, nicht den Platz; der Shard löst sie über seine
+ * eigenen `knownIds` auf. Ein falsch gerouteter Auftrag bleibt deshalb ohne
+ * Antwort, statt ein anderes Objekt zu liefern.
+ *
+ * @returns false, wenn die ID im aktuellen Katalog (noch) fehlt.
+ */
+function sendForId(noradId: NoradId, message: WorkerRequest): boolean {
+  const slot = catalogIndex.slotById.get(noradId);
+  if (slot === undefined || !pool) return false;
+  sendTo(shardOf(slot), message);
+  return true;
+}
 
 /** Imperative API des Worker-Pools – bewusst außerhalb von React. */
 export const engine = {
-  requestTrail(index: number, fromMin = -25, toMin = 70, samples = 220): void {
-    sendTo(shardOf(index), { type: 'trail', index, fromMin, toMin, samples });
+  requestTrail(noradId: NoradId, fromMin = -25, toMin = 70, samples = 220): boolean {
+    return sendForId(noradId, { type: 'trail', noradId, fromMin, toMin, samples });
   },
-  requestPass(index: number, searchHours = 48): void {
-    sendTo(shardOf(index), { type: 'pass', index, searchHours });
+  requestPass(noradId: NoradId, searchHours = 48): boolean {
+    return sendForId(noradId, { type: 'pass', noradId, searchHours });
   },
   setTimeScale(value: number): void {
     // Zurück auf Echtzeit heißt: wieder auf die Wanduhr aufsetzen. Sonst
@@ -97,8 +128,8 @@ export const engine = {
    * iterativen Umkehrung des Erdellipsoids und kosten rund ein Drittel des
    * Ticks; angezeigt werden sie nur für dieses eine Objekt.
    */
-  setSelected(index: number | null): void {
-    broadcast({ type: 'select', index });
+  setSelected(noradId: NoradId | null): void {
+    broadcast({ type: 'select', noradId });
   },
   get shardCount(): number {
     return pool?.shardCount ?? 0;
@@ -177,21 +208,30 @@ function completeTickIfReady(state: Pool, force: boolean): void {
 /* Katalog zusammenführen                                               */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Baut die Nachschlagetabellen einer Katalogfassung – die Flags je Platz und
+ * die Map ID→Platz im selben Durchlauf. Getrennt entstanden, könnten Flags
+ * und Auflösung der Auswahl für einen Moment verschiedene Katalogfassungen
+ * beschreiben.
+ */
 function rebuildCatalogIndex(catalog: SatelliteMeta[], total: number): void {
   const groupIds = new Uint8Array(total);
   const starlink = new Uint8Array(total);
   const highlight = new Uint8Array(total);
+  const slotById = new Map<NoradId, number>();
 
   for (const meta of catalog) {
     if (meta.index >= total) continue;
     groupIds[meta.index] = GROUP_LOAD_ORDER.indexOf(meta.group);
     starlink[meta.index] = meta.group === 'starlink' ? 1 : 0;
     highlight[meta.index] = meta.highlight ? 1 : 0;
+    slotById.set(meta.noradId, meta.index);
   }
 
   catalogIndex.groupIds = groupIds;
   catalogIndex.starlink = starlink;
   catalogIndex.highlight = highlight;
+  catalogIndex.slotById = slotById;
   catalogIndex.version += 1;
 }
 
@@ -213,6 +253,7 @@ function flushCatalog(setCatalog: (catalog: SatelliteMeta[]) => void): void {
 
   telemetry.count = catalogTotal;
   rebuildCatalogIndex(catalog, catalogTotal);
+  // Löst die Auswahl gegen die eben gebaute Map neu auf (store.ts).
   setCatalog(catalog);
 }
 
@@ -232,7 +273,8 @@ export function useSatelliteEngine({ intervalMs = 100 }: EngineOptions = {}): vo
   const setStatus = useAppStore((s) => s.setStatus);
   const pushError = useAppStore((s) => s.pushError);
   const setPasses = useAppStore((s) => s.setPasses);
-  const selectedIndex = useAppStore((s) => s.selectedIndex);
+  const selectedId = useAppStore((s) => s.selectedId);
+  const selectedMeta = useAppStore((s) => s.selectedMeta);
   const started = useRef(false);
 
   useEffect(() => {
@@ -250,9 +292,15 @@ export function useSatelliteEngine({ intervalMs = 100 }: EngineOptions = {}): vo
     telemetry.intervalMs = intervalMs;
     pool = state;
 
+    // Ein neuer Pool vergibt die Plätze neu. Metadaten, Map und der Platz der
+    // Auswahl dürfen nicht auf dem alten Stand stehen bleiben: Bis zur ersten
+    // Katalogfassung gilt die Auswahl als nicht aufgelöst (-1), danach findet
+    // `setCatalog` sie über die ID wieder – auch an einem anderen Platz.
     catalogIndex.meta = [];
     catalogTotal = 0;
     catalogDirty = false;
+    rebuildCatalogIndex([], 0);
+    setCatalog([]);
 
     const scheduleFlush = () => {
       catalogDirty = true;
@@ -302,13 +350,18 @@ export function useSatelliteEngine({ intervalMs = 100 }: EngineOptions = {}): vo
           break;
 
         case 'trail':
-          trailState.index = msg.index;
+          // Stale-Guard: Eine Spur für ein Objekt, das nicht mehr gewählt ist,
+          // wird verworfen. Sonst überschriebe eine verspätete Antwort die
+          // frische Spur der neuen Auswahl, und die bliebe bis zur nächsten
+          // Nachführung (12 s, OrbitTrail) unsichtbar.
+          if (msg.noradId !== useAppStore.getState().selectedId) break;
+          trailState.noradId = msg.noradId;
           trailState.points = msg.points;
           trailState.version += 1;
           break;
 
         case 'pass':
-          setPasses(msg.index, msg.passes);
+          setPasses(msg.noradId, msg.passes);
           break;
 
         case 'error':
@@ -370,6 +423,18 @@ export function useSatelliteEngine({ intervalMs = 100 }: EngineOptions = {}): vo
   }, [activeGroups]);
 
   useEffect(() => {
-    engine.setSelected(selectedIndex);
-  }, [selectedIndex]);
+    engine.setSelected(selectedId);
+  }, [selectedId]);
+
+  // Überflugliste: angefordert, sobald die gewählte ID im Katalog steht – bei
+  // der Auswahl selbst oder später, wenn das Objekt erst mit einer Gruppe
+  // eintrifft. `selectedMeta` wechselt außerdem, wenn ein neu aufgebauter Pool
+  // dieselbe ID an anderem Platz führt (er kennt die Anfrage des alten
+  // nicht) und wenn echte Bahndaten den Offline-Fallback ersetzen. Eine
+  // erneute Wahl desselben Objekts ändert nichts davon und rechnet deshalb
+  // nicht noch einmal (store.ts, `select`).
+  useEffect(() => {
+    if (selectedMeta === null) return;
+    engine.requestPass(selectedMeta.noradId);
+  }, [selectedMeta]);
 }

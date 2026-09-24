@@ -1,40 +1,83 @@
 /**
- * Prüft, dass Bahnhöhe und Subpunkt des ausgewählten Objekts im
- * Telemetrie-Buffer ankommen – über den ganzen Weg Hook → Worker-Pool →
- * Shard → `scatter` → `readSample`, mit dem echten Code aus
+ * Prüft die Auswahl über den ganzen Weg Hook → Worker-Pool → Shard →
+ * `scatter` → `readSample`, mit dem echten Code aus
  * src/hooks/useSatelliteEngine.ts und src/workers/sgp4.worker.ts.
  *
- * Anlass ist ein Gerätebild (iPhone, PWA, 24.09.2026, 06:25 MESZ): Für
- * BEIDOU-3 M16 standen „Bahnhöhe – km“ und „Subpunkt –° / –°“ in der Karte,
- * Elevation, Azimut, Distanz und Speed zeigten Werte. Abschnitt 0 belegt,
- * dass diese Werte über sechs Stunden alt waren: Der zuständige Shard hat seit
- * dem Vorabend keinen Tick mehr geliefert. Subpunkt und Bahnhöhe entstehen
- * seit c027d50 nur im Tick nach der Auswahl – ohne Tick bleiben sie NaN.
+ * Abschnitte 0 und A–D: Bahnhöhe und Subpunkt des ausgewählten Objekts kommen
+ * im Telemetrie-Buffer an. Anlass ist ein Gerätebild (iPhone, PWA,
+ * 24.09.2026, 06:25 MESZ): Für BEIDOU-3 M16 standen „Bahnhöhe – km“ und
+ * „Subpunkt –° / –°“ in der Karte, Elevation, Azimut, Distanz und Speed
+ * zeigten Werte. Abschnitt 0 belegt, dass diese Werte über sechs Stunden alt
+ * waren: Der zuständige Shard hat seit dem Vorabend keinen Tick mehr
+ * geliefert. Subpunkt und Bahnhöhe entstehen seit c027d50 nur im Tick nach der
+ * Auswahl – ohne Tick bleiben sie NaN.
+ *
+ * Abschnitte E–I: Die Auswahl hängt an der NORAD-ID, nicht am Platz im
+ * Telemetrie-Buffer.
+ *   E  Auswahl per ID: Karte, Telemetrie, Bahnspur und Überflüge gehören zu
+ *      genau diesem Objekt.
+ *   F  Plätze verschieben sich: F1 Fallback-Ersatz beim Start (gleicher
+ *      Platz, neue Bahndaten), F2 neu aufgebauter Pool, in dem Starlink diesmal
+ *      lädt und der Gesamtkatalog deshalb sieben Plätze weiter hinten steht.
+ *   G  Verspätete Antworten für ein vorher gewähltes Objekt werden verworfen.
+ *   H  Eine ID, die nicht im Katalog steht, bleibt gewählt und löst sich auf,
+ *      sobald ihre (zuvor fehlgeschlagene) Gruppe nachgeladen ist.
+ *   I  Alpha-5: `A0001` über Liste, Tap und rohe Kennung.
+ * Referenz ist dort satellite.js direkt (`propagate`, `gstime`,
+ * `ecfToLookAngles`, `eciToGeodetic`) mit demselben TLE – nicht src/math.
+ *
+ * Gegenprobe gegen den Stand vor der Umstellung (3c5dc67): src per
+ * `git show HEAD:…` nach node_modules/.cache/, die mit GEGENPROBE markierte
+ * Zeile auf `select(index)` + `engine.requestPass(index)` umgestellt, die
+ * alten Feldnamen (`passIndex`, `trailState.index`) auf die neuen abgebildet,
+ * Abschnitt F allein (`SELECTION_ONLY=F`). Ergebnis siehe Abschnitt F.
  *
  * Aufbau ohne Browser:
  *   - Die Shards laufen als echte Threads (`node:worker_threads`) mit dem
  *     gebündelten Worker (node_modules/.cache/verify-selection-worker.mjs).
  *     Ein Vorspann stellt `self` bereit, liefert statt CelesTrak feste
- *     TLE-Sätze mit Epoche „heute“ aus und kann den Thread mitten in einem
+ *     TLE-Sätze mit Epoche „heute“ aus, kann Abrufe scheitern lassen, die
+ *     langen Wartezeiten des Laders stauchen und den Thread mitten in einem
  *     Tick „einfrieren“ (Abschnitt D).
- *   - Der Hook läuft im echten Reconciler von React Three Fiber wie in
- *     scripts/verify-wiring.ts; `Worker` ist eine Hülle um den Node-Thread.
- *   - Referenz ist satellite.js über `propagateEphemeris` zum Zeitpunkt des
- *     gelieferten Ticks.
+ *   - Hook, OrbitTrail und TapPicker laufen im echten Reconciler von React
+ *     Three Fiber wie in scripts/verify-wiring.ts; `Worker` ist eine Hülle um
+ *     den Node-Thread, die Antworten auch zurückhalten kann (Abschnitt G).
+ *   - Karte, Liste und HUD rendert react-dom/server aus dem aktuellen Store.
  *
- * Aufruf: npm run verify:selection
+ * Aufruf: npm run verify:selection – einzelne Abschnitte mit
+ * `SELECTION_ONLY=EG npm run verify:selection`.
  */
-import { StrictMode, createElement, type ReactElement } from 'react';
-import { act, createRoot } from '@react-three/fiber';
+import { Fragment, StrictMode, createElement, type FunctionComponent, type ReactElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server.browser';
+import { act, advance, createRoot, type RootState } from '@react-three/fiber';
 import { Worker as NodeWorker } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
-import { twoline2satrec } from 'satellite.js';
+import type { PerspectiveCamera } from 'three';
+import type { Line2 } from 'three-stdlib';
+import type { StoreApi, UseBoundStore } from 'zustand';
+import {
+  ecfToLookAngles,
+  eciToEcf,
+  eciToGeodetic,
+  gstime,
+  propagate,
+  twoline2satrec,
+  type SatRec,
+} from 'satellite.js';
+import { OrbitTrail } from '../src/components/canvas/OrbitTrail';
+import { TapPicker } from '../src/components/canvas/TapPicker';
+import { Hud } from '../src/components/ui/Hud';
+import { SatelliteDrawer } from '../src/components/ui/SatelliteDrawer';
+import { TelemetryPanel } from '../src/components/ui/TelemetryPanel';
+// Als Namensraum: Die Gegenprobe bündelt diese Datei gegen den alten Stand,
+// dem `normalizeNoradId` fehlt – ein benannter Import bräche dort den Build.
+import * as tleSources from '../src/data/tleSources';
 import { engine, useSatelliteEngine } from '../src/hooks/useSatelliteEngine';
 import { RAD, geoToObserverGd } from '../src/math/coords';
 import { propagateEphemeris } from '../src/math/propagation';
-import { catalogIndex, readSample, telemetry } from '../src/state/runtime';
+import { catalogIndex, readSample, telemetry, trailState } from '../src/state/runtime';
 import { useAppStore } from '../src/state/store';
-import type { SatelliteGroup } from '../src/types';
+import type { PassPrediction, SatelliteGroup } from '../src/types';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -50,6 +93,10 @@ function expect(label: string, ok: boolean, detail: string): void {
     console.error(`  ✗ ${label}: ${detail}`);
   }
 }
+
+const ONLY = process.env.SELECTION_ONLY ?? '';
+/** Läuft dieser Abschnitt? Ohne `SELECTION_ONLY` alle. */
+const runs = (section: string): boolean => ONLY === '' || ONLY.includes(section);
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const f = (value: number, digits = 1): string =>
@@ -109,6 +156,8 @@ console.log('0. Gerätebild vom 24.09.2026, 06:25 MESZ: Alter der angezeigten Te
 /* TLE-Sätze mit Epoche „jetzt“                                         */
 /* ------------------------------------------------------------------ */
 
+type Tle = [string, string, string];
+
 /** Prüfziffer nach NORAD: Ziffernsumme, Minus zählt 1. */
 function checksum(line: string): number {
   let sum = 0;
@@ -121,6 +170,7 @@ function checksum(line: string): number {
 
 interface Elements {
   name: string;
+  /** Katalogfeld der TLE-Zeile, wie CelesTrak es liefert – auch Alpha-5. */
   norad: string;
   intl: string;
   inclination: number;
@@ -137,7 +187,7 @@ interface Elements {
  * LEO-Objekt divergiert nach einigen Monaten, und dann fehlte die ganze Zeile
  * statt nur des Subpunkts.
  */
-function makeTle(el: Elements, epochMs: number): [string, string, string] {
+function makeTle(el: Elements, epochMs: number): Tle {
   const date = new Date(epochMs);
   const yearStart = Date.UTC(date.getUTCFullYear(), 0, 1);
   const day = 1 + (epochMs - yearStart) / 86_400_000;
@@ -151,7 +201,7 @@ function makeTle(el: Elements, epochMs: number): [string, string, string] {
   return [el.name, `${body1}${checksum(body1)}`, `${body2}${checksum(body2)}`];
 }
 
-const block = (lines: [string, string, string]) => `${lines.join('\n')}\n`;
+const block = (lines: Tle) => `${lines.join('\n')}\n`;
 
 const LEO: Elements = {
   name: 'ISS (ZARYA)',
@@ -215,6 +265,137 @@ const FEED = {
 };
 
 /* ------------------------------------------------------------------ */
+/* Referenz: satellite.js direkt                                        */
+/* ------------------------------------------------------------------ */
+
+/** Beobachter im Format von satellite.js, unabhängig von src/math berechnet. */
+const REF_OBSERVER = {
+  latitude: (OBSERVER.latitudeDeg * Math.PI) / 180,
+  longitude: (OBSERVER.longitudeDeg * Math.PI) / 180,
+  height: OBSERVER.altitudeKm,
+};
+
+interface Truth {
+  azimuth: number;
+  elevation: number;
+  rangeKm: number;
+  altitudeKm: number;
+  latitudeDeg: number;
+  longitudeDeg: number;
+}
+
+const satrecCache = new Map<string, SatRec>();
+
+/** Wo steht das Objekt aus `tle` zur Zeit `ms`? Nur satellite.js, kein Code aus src/. */
+function truth(tle: Tle, ms: number): Truth | null {
+  const key = `${tle[1]}\n${tle[2]}`;
+  let satrec = satrecCache.get(key);
+  if (!satrec) {
+    satrec = twoline2satrec(tle[1], tle[2]);
+    satrecCache.set(key, satrec);
+  }
+  const date = new Date(ms);
+  const pv = propagate(satrec, date);
+  const position = pv.position;
+  if (!position || typeof position === 'boolean') return null;
+  const gmst = gstime(date);
+  const look = ecfToLookAngles(REF_OBSERVER, eciToEcf(position, gmst));
+  const geo = eciToGeodetic(position, gmst);
+  return {
+    azimuth: look.azimuth,
+    elevation: look.elevation,
+    rangeKm: look.rangeSat,
+    altitudeKm: geo.height,
+    latitudeDeg: (geo.latitude * 180) / Math.PI,
+    longitudeDeg: (geo.longitude * 180) / Math.PI,
+  };
+}
+
+/** Blickrichtung wie in TapPicker und OrbitTrail: x Ost, y oben, −z Nord. */
+function direction(azimuth: number, elevation: number): [number, number, number] {
+  const cosEl = Math.cos(elevation);
+  return [cosEl * Math.sin(azimuth), Math.sin(elevation), -cosEl * Math.cos(azimuth)];
+}
+
+function angleDeg(a: [number, number, number], b: [number, number, number]): number {
+  const dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const norm = Math.hypot(...a) * Math.hypot(...b);
+  return (Math.acos(Math.min(1, Math.max(-1, dot / norm))) * 180) / Math.PI;
+}
+
+/* ------------------------------------------------------------------ */
+/* Katalog für die Abschnitte E–I                                       */
+/* ------------------------------------------------------------------ */
+
+/** Sieben Starlink-Objekte: so viele Plätze rückt der Gesamtkatalog nach hinten, wenn Starlink lädt. */
+const STARLINKS: Elements[] = Array.from({ length: 7 }, (_, i) => ({
+  name: `STARLINK-T${i}`,
+  norad: String(70000 + i),
+  intl: '26010A',
+  inclination: 53.05,
+  raan: (i * 47) % 360,
+  eccentricity: 0.0001,
+  argPerigee: 90,
+  meanAnomaly: (i * 61) % 360,
+  meanMotion: 15.06,
+  bstar: ' 20000-3',
+}));
+const STARLINK_TLES = STARLINKS.map((el) => makeTle(el, epochMs));
+
+/**
+ * Ein Objekt mit Alpha-5-Kennung. Bahn wie ein Galileo-Satellit, Knoten und
+ * Anomalie so gewählt, dass es über Leipzig hoch am Himmel steht: Der Tap in
+ * Abschnitt I braucht ein Objekt über dem Horizont.
+ */
+function alpha5Elements(): Elements {
+  const base: Elements = {
+    name: 'ALPHA5 TESTOBJEKT',
+    norad: 'A0001',
+    intl: '26020A',
+    inclination: 56,
+    raan: 0,
+    eccentricity: 0.0003,
+    argPerigee: 0,
+    meanAnomaly: 0,
+    meanMotion: 1.7,
+    bstar: ' 00000+0',
+  };
+  let best = { minEl: Number.NEGATIVE_INFINITY, raan: 0, meanAnomaly: 0 };
+  for (let raan = 0; raan < 360; raan += 10) {
+    for (let meanAnomaly = 0; meanAnomaly < 360; meanAnomaly += 10) {
+      const tle = makeTle({ ...base, raan, meanAnomaly }, epochMs);
+      const a = truth(tle, epochMs);
+      const b = truth(tle, epochMs + 30 * 60_000);
+      if (!a || !b) continue;
+      const minEl = Math.min(a.elevation, b.elevation);
+      if (minEl > best.minEl) best = { minEl, raan, meanAnomaly };
+    }
+  }
+  return { ...base, raan: best.raan, meanAnomaly: best.meanAnomaly };
+}
+const ALPHA5 = alpha5Elements();
+const ALPHA5_TLE = makeTle(ALPHA5, epochMs);
+
+/** Katalog mit Starlink und Alpha-5: stations = ISS, starlink = 7 Objekte, active = Gesamtkatalog. */
+const FEED_FULL = {
+  stations: block(LEO_TLE),
+  starlink: STARLINK_TLES.map(block).join(''),
+  active: fillers(epochMs, 23) + block(MEO_TLE) + block(ALPHA5_TLE) + block(LEO_TLE),
+};
+
+/** Was die Prüfung von einem Objekt erwartet: Name, normalisierte ID, TLE. */
+interface Target {
+  name: string;
+  id: string;
+  tle: Tle;
+}
+const LEO_T: Target = { name: LEO.name, id: LEO.norad, tle: LEO_TLE };
+const MEO_T: Target = { name: MEO.name, id: MEO.norad, tle: MEO_TLE };
+const STARLINK_T3: Target = { name: STARLINKS[3].name, id: STARLINKS[3].norad, tle: STARLINK_TLES[3] };
+/** Normalisiert von Hand: A = 10, also 10·10000 + 1. */
+const ALPHA5_T: Target = { name: ALPHA5.name, id: '100001', tle: ALPHA5_TLE };
+
+/* ------------------------------------------------------------------ */
 /* Worker-Pool als Node-Threads                                         */
 /* ------------------------------------------------------------------ */
 
@@ -226,6 +407,12 @@ const WORKER_BUNDLE = fileURLToPath(new URL('./verify-selection-worker.mjs', imp
  * `self` entsteht vor dem Import des Workers, denn der liest es auf oberster
  * Ebene. Nachrichten nimmt der Port erst an, wenn der Worker seinen Handler
  * gesetzt hat – wie im Browser, wo sie bis zum Ende des Skripts warten.
+ *
+ * `failCalls` lässt die ersten n Abrufe einer Gruppe mit HTTP 404 scheitern,
+ * wie ein gedrosseltes CelesTrak. `shortWaits` staucht die langen Wartezeiten
+ * des Laders – Gruppenabstand 1,5 s und Wiederholungen auf ein Zwanzigstel,
+ * das Nachladen nach 45 s auf `retryMs` –, damit Abschnitte F und H nicht
+ * minutenlang laufen. Takt und Tick bleiben unberührt (alles unter 1,5 s).
  *
  * `freeze` bildet nach, was iOS mit einer Seite im Hintergrund oder bei
  * gesperrtem Display tut: Der Prozess steht, die monotone Uhr hinter
@@ -243,13 +430,21 @@ const scope = {
   postMessage(message, transfer) { parentPort.postMessage(message, transfer || []); },
 };
 globalThis.self = scope;
+const realSetTimeout = globalThis.setTimeout;
+const calls = {};
 globalThis.fetch = async (url) => {
   const group = new URL(String(url)).searchParams.get('GROUP');
+  calls[group] = (calls[group] || 0) + 1;
   const delay = workerData.delays[group] || 0;
-  if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-  const text = workerData.feed[group];
+  if (delay) await new Promise((resolve) => realSetTimeout(resolve, delay));
+  const failing = calls[group] <= (workerData.failCalls[group] || 0);
+  const text = failing ? '' : workerData.feed[group];
   return text ? new Response(text, { status: 200 }) : new Response('No GP data found', { status: 404 });
 };
+if (workerData.shortWaits) {
+  globalThis.setTimeout = (fn, ms, ...args) =>
+    realSetTimeout(fn, ms >= 40000 ? workerData.retryMs : ms >= 1500 ? ms / 20 : ms, ...args);
+}
 const realNow = performance.now.bind(performance);
 let offset = 0;
 let pendingFreeze = 0;
@@ -273,8 +468,44 @@ import(pathToFileURL(workerData.bundle).href).then(() => {
 });
 `;
 
-let poolSetup: { feed: Record<string, string>; delays: Record<string, number> } = { feed: {}, delays: {} };
+interface PoolSetup {
+  feed: Record<string, string>;
+  delays: Record<string, number>;
+  failCalls: Record<string, number>;
+  shortWaits: boolean;
+  retryMs: number;
+}
+
+const DEFAULT_SETUP: PoolSetup = { feed: FEED, delays: {}, failCalls: {}, shortWaits: false, retryMs: 0 };
+let poolSetup: PoolSetup = DEFAULT_SETUP;
 const liveWorkers = new Set<ThreadWorker>();
+
+/** Nachricht eines Shards, soweit die Prüfung sie liest. */
+interface ShardMessage {
+  type?: string;
+  time?: number;
+  durationMs?: number;
+  noradId?: string;
+  points?: Float32Array;
+}
+
+/** Letzte Bahnspur-Anfrage je ID – das Zeitfenster, in dem der Shard sie gerechnet hat. */
+interface TrailRequest {
+  at: number;
+  fromMin: number;
+  toMin: number;
+  samples: number;
+}
+const trailRequests = new Map<string, TrailRequest>();
+/** Jede eingetroffene Bahnspur, mit Anfrage- und Empfangszeit. */
+const trailLog: Array<{ noradId: string | undefined; points: Float32Array; request?: TrailRequest; receivedAt: number }> =
+  [];
+/** Jede Auswahl-, Spur- und Überflug-Anfrage an einen Shard. */
+const requestLog: Array<{ type: string; noradId: unknown; shard: number }> = [];
+
+/** Solange gesetzt, hält die Hülle passende Antworten zurück, statt sie dem Hook zu geben (Abschnitt G). */
+let holdFilter: ((data: ShardMessage) => boolean) | null = null;
+const held: Array<{ worker: ThreadWorker; data: ShardMessage }> = [];
 
 /** `Worker` des Browsers, soweit der Hook ihn nutzt – plus Messpunkte für die Prüfung. */
 class ThreadWorker {
@@ -290,11 +521,23 @@ class ThreadWorker {
 
   constructor(_url: URL | string, _options?: { type?: string; name?: string }) {
     this.thread = new NodeWorker(BOOTSTRAP, { eval: true, workerData: { bundle: WORKER_BUNDLE, ...poolSetup } });
-    this.thread.on('message', (data: { type?: string; time?: number; durationMs?: number }) => {
+    this.thread.on('message', (data: ShardMessage) => {
       if (data?.type === 'tick') {
         this.lastTickAt = Date.now();
         this.lastTickTime = data.time ?? 0;
         this.lastTickDurationMs = data.durationMs ?? 0;
+      }
+      if (data?.type === 'trail' && data.points) {
+        trailLog.push({
+          noradId: data.noradId,
+          points: data.points,
+          request: data.noradId === undefined ? undefined : trailRequests.get(data.noradId),
+          receivedAt: Date.now(),
+        });
+      }
+      if (holdFilter?.(data)) {
+        held.push({ worker: this, data });
+        return;
       }
       this.onmessage?.({ data });
     });
@@ -302,8 +545,22 @@ class ThreadWorker {
     liveWorkers.add(this);
   }
 
-  postMessage(message: { type?: string; shardIndex?: number }, transfer?: Transferable[]): void {
+  postMessage(
+    message: { type?: string; shardIndex?: number; noradId?: string; fromMin?: number; toMin?: number; samples?: number },
+    transfer?: Transferable[],
+  ): void {
     if (message?.type === 'init') this.shard = message.shardIndex ?? -1;
+    if (message?.type === 'select' || message?.type === 'trail' || message?.type === 'pass') {
+      requestLog.push({ type: message.type, noradId: message.noradId, shard: this.shard });
+    }
+    if (message?.type === 'trail' && message.noradId !== undefined) {
+      trailRequests.set(message.noradId, {
+        at: Date.now(),
+        fromMin: message.fromMin ?? 0,
+        toMin: message.toMin ?? 0,
+        samples: message.samples ?? 0,
+      });
+    }
     this.thread.postMessage(message, (transfer ?? []) as never);
   }
 
@@ -317,6 +574,21 @@ class ThreadWorker {
   }
 }
 
+/** Gibt zurückgehaltene Antworten in ihrer Reihenfolge an den Hook weiter. */
+function releaseHeld(match: (data: ShardMessage) => boolean): number {
+  let released = 0;
+  for (let i = 0; i < held.length; ) {
+    if (match(held[i].data)) {
+      const [item] = held.splice(i, 1);
+      item.worker.onmessage?.({ data: item.data });
+      released += 1;
+    } else {
+      i += 1;
+    }
+  }
+  return released;
+}
+
 Object.defineProperty(globalThis, 'Worker', { value: ThreadWorker, configurable: true, writable: true });
 // Der Wachhund des Pools läuft über `window.setInterval`. Erst hier setzen:
 // React und R3F haben ihre Umgebung beim Laden bereits gelesen.
@@ -326,7 +598,26 @@ Object.defineProperty(globalThis, 'window', {
   writable: true,
 });
 
-/** Der Shard, der den globalen Index besitzt – dieselbe Modulo-Regel wie im Pool. */
+// Zwei erwartete Meldungen, die sonst jede echte Ausgabe verschütten:
+//  - drei <Line> legt seine Anfangsgeometrie aus `Vector3`-Punkten an und
+//    prüft sie per `instanceof`. Das esbuild-Bündel enthält three zweimal
+//    (build/three.cjs und build/three.module.js), die Prüfung schlägt fehl,
+//    und three meldet beim Einhängen einen NaN-Radius. OrbitTrail überschreibt
+//    die Geometrie ohnehin mit der ersten Spur; im Vite-Build gibt es nur ein
+//    three.
+//  - Katalogfassung und Worker-Antworten ändern den Store aus Timern und
+//    Nachrichten heraus, also außerhalb von act() – wie in der App. Seit
+//    OrbitTrail und der Hook an `selectedMeta` hängen, rendern sie dabei neu,
+//    und React warnt. Die Prüfungen warten ohnehin auf das Ergebnis.
+const consoleError = console.error.bind(console);
+console.error = (...args: unknown[]) => {
+  const first = typeof args[0] === 'string' ? args[0] : '';
+  if (first.startsWith('THREE.LineSegmentsGeometry.computeBoundingSphere')) return;
+  if (first.includes('inside a test was not wrapped in act(')) return;
+  consoleError(...args);
+};
+
+/** Der Shard, der den Platz besitzt – dieselbe Modulo-Regel wie im Pool. */
 function ownerOf(index: number): ThreadWorker {
   const shard = index % engine.shardCount;
   for (const worker of liveWorkers) if (worker.shard === shard) return worker;
@@ -337,14 +628,49 @@ function ownerOf(index: number): ThreadWorker {
 /* Einhängen wie in App.tsx                                             */
 /* ------------------------------------------------------------------ */
 
+/** Zeigerziel für TapPicker: sammelt Listener, liefert ein festes Rechteck. */
+class FakeCanvas {
+  readonly style = {};
+  private readonly listeners = new Map<string, Set<(event: unknown) => void>>();
+  addEventListener(type: string, listener: (event: unknown) => void): void {
+    if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+    this.listeners.get(type)?.add(listener);
+  }
+  removeEventListener(type: string, listener: (event: unknown) => void): void {
+    this.listeners.get(type)?.delete(listener);
+  }
+  getBoundingClientRect() {
+    return { left: 0, top: 0, width: 400, height: 800 };
+  }
+  dispatch(type: string, event: unknown): void {
+    for (const listener of this.listeners.get(type) ?? []) listener(event);
+  }
+}
+
+type RootStore = UseBoundStore<StoreApi<RootState>>;
+
 function Engine(): null {
   useSatelliteEngine({ intervalMs: 100 });
   return null;
 }
 
-async function mount(element: ReactElement) {
-  const gl = { domElement: {}, render() {}, setSize() {}, setPixelRatio() {} };
+/** Wie App.tsx plus die beiden Canvas-Teile, die an der Auswahl hängen. */
+function Scene(): ReactElement {
+  useSatelliteEngine({ intervalMs: 100 });
+  return createElement(Fragment, null, createElement(OrbitTrail), createElement(TapPicker));
+}
+
+interface Mounted {
+  canvas: FakeCanvas;
+  store: RootStore;
+  unmount: () => Promise<void>;
+}
+
+async function mount(element: ReactElement): Promise<Mounted> {
+  const canvas = new FakeCanvas();
+  const gl = { domElement: canvas, render() {}, setSize() {}, setPixelRatio() {} };
   const root = createRoot({} as HTMLCanvasElement);
+  let store: RootStore | null = null;
   await act(async () => {
     await root.configure({
       gl: gl as never,
@@ -352,20 +678,29 @@ async function mount(element: ReactElement) {
       frameloop: 'never',
       dpr: 1,
     });
-    root.render(element);
+    store = root.render(element) as RootStore;
   });
-  return { unmount: () => act(async () => root.unmount()) };
+  return { canvas, store: store as unknown as RootStore, unmount: () => act(async () => root.unmount()) };
 }
 
 const setStore = (partial: Parameters<typeof useAppStore.setState>[0]) =>
   act(async () => useAppStore.setState(partial));
 
-/** Wie TapPicker und SatelliteDrawer: Auswahl setzen und die Überflugsuche anstoßen. */
-const pick = (index: number) =>
-  act(async () => {
-    useAppStore.getState().select(index);
-    engine.requestPass(index);
-  });
+/**
+ * Wählt ein Objekt über seine NORAD-ID – wie Liste und Tap: `select` mit der
+ * Kennung. Die Überflugliste fordert der Hook selbst an.
+ */
+const chooseByNorad = (norad: string) => act(async () => useAppStore.getState().select(norad)); // GEGENPROBE
+const clearSelection = () => act(async () => useAppStore.getState().select(null));
+
+const CLEAR_SELECTION = {
+  selectedId: null,
+  selectedIndex: null,
+  selectedMeta: null,
+  passes: [] as PassPrediction[],
+  passId: null,
+  passPending: false,
+};
 
 async function waitFor(label: string, condition: () => boolean, timeoutMs = 10_000): Promise<boolean> {
   const started = Date.now();
@@ -380,6 +715,11 @@ async function waitFor(label: string, condition: () => boolean, timeoutMs = 10_0
 }
 
 const indexOf = (norad: string): number => catalogIndex.meta.findIndex((meta) => meta?.noradId === norad);
+/** Steht die ID in der zuletzt veröffentlichten Katalogfassung? `telemetry.count` setzt erst `flushCatalog`. */
+const inCatalog = (norad: string): boolean => {
+  const index = indexOf(norad);
+  return index >= 0 && telemetry.count > index;
+};
 
 /** Einige vollständige Ticks abwarten – die Auswahl muss erst im Shard ankommen. */
 const settle = async () => {
@@ -395,7 +735,7 @@ const STALE_MS = 2000;
  * Ticks, aus dem er stammt. Die Toleranzen decken Float32 ab; NaN fällt in
  * jedem Fall durch.
  */
-function inspect(index: number, tle: [string, string, string]) {
+function inspect(index: number, tle: Tle) {
   const owner = ownerOf(index);
   const sample = readSample(index);
   const reference = propagateEphemeris(twoline2satrec(tle[1], tle[2]), new Date(owner.lastTickTime), observerGd);
@@ -417,51 +757,56 @@ function inspect(index: number, tle: [string, string, string]) {
   };
 }
 
+function setCores(cores: number): void {
+  Object.defineProperty(globalThis.navigator, 'hardwareConcurrency', { value: cores, configurable: true });
+}
+
 async function scenario(
   title: string,
   cores: number,
-  run: () => Promise<void>,
-  options: { strict?: boolean; groups?: SatelliteGroup[]; delays?: Record<string, number> } = {},
+  run: (mounted: Mounted) => Promise<void>,
+  options: {
+    strict?: boolean;
+    scene?: boolean;
+    groups?: SatelliteGroup[];
+    setup?: Partial<PoolSetup>;
+  } = {},
 ): Promise<void> {
   console.log(`${title} – ${cores} Kerne`);
-  Object.defineProperty(globalThis.navigator, 'hardwareConcurrency', { value: cores, configurable: true });
-  poolSetup = { feed: FEED, delays: options.delays ?? {} };
+  setCores(cores);
+  poolSetup = { ...DEFAULT_SETUP, ...options.setup };
   useAppStore.setState({
     observer: null,
-    selectedIndex: null,
-    passes: [],
-    passIndex: null,
+    ...CLEAR_SELECTION,
+    errors: [],
     // Nur Gruppen, die der Vorspann ausliefert. Nach jeder Gruppe wartet der
     // Lader 1,5 s (Rate-Limit von CelesTrak); der Gesamtkatalog allein ist
     // deshalb der schnellste Weg zu LEO und MEO.
     activeGroups: options.groups ?? ['other'],
   });
-  const element = createElement(Engine);
+  const element = createElement(options.scene ? Scene : Engine);
   const mounted = await mount(options.strict ? createElement(StrictMode, null, element) : element);
   try {
     await setStore({ observer: OBSERVER });
-    await run();
+    await run(mounted);
   } finally {
     await mounted.unmount();
-    await setStore({ selectedIndex: null });
+    await setStore({ ...CLEAR_SELECTION });
   }
 }
 
 async function catalogReady(): Promise<{ leo: number; meo: number }> {
-  await waitFor('Katalog mit LEO und MEO', () => {
-    const leo = indexOf(LEO.norad);
-    const meo = indexOf(MEO.norad);
-    return leo >= 0 && meo >= 0 && telemetry.count > Math.max(leo, meo);
-  });
+  await waitFor('Katalog mit LEO und MEO', () => inCatalog(LEO.norad) && inCatalog(MEO.norad));
   await settle();
   return { leo: indexOf(LEO.norad), meo: indexOf(MEO.norad) };
 }
 
 const where = (index: number) => `#${index}, Shard ${index % engine.shardCount}/${engine.shardCount}`;
 
-async function selectAndCheck(label: string, index: number, tle: [string, string, string]): Promise<void> {
-  await pick(index);
+async function selectAndCheck(label: string, norad: string, tle: Tle): Promise<void> {
+  await chooseByNorad(norad);
   await settle();
+  const index = useAppStore.getState().selectedIndex ?? -1;
   const result = inspect(index, tle);
   expect(`${label} ${where(index)}`, result.ok, result.text);
 }
@@ -470,41 +815,47 @@ async function selectAndCheck(label: string, index: number, tle: [string, string
 /* A–C: die Verdachtsfälle                                              */
 /* ------------------------------------------------------------------ */
 
-for (const cores of [2, 4, 8]) {
-  await scenario('A. Auswahl im laufenden Pool (Index → Shard → Slot → scatter, SGP4 und SDP4)', cores, async () => {
-    const { leo, meo } = await catalogReady();
-    await selectAndCheck(`LEO ${LEO.name}`, leo, LEO_TLE);
-    await selectAndCheck(`MEO ${MEO.name}`, meo, MEO_TLE);
-  });
+if (runs('A')) {
+  for (const cores of [2, 4, 8]) {
+    await scenario('A. Auswahl im laufenden Pool (ID → Platz → Shard → scatter, SGP4 und SDP4)', cores, async () => {
+      await catalogReady();
+      await selectAndCheck(`LEO ${LEO.name}`, LEO.norad, LEO_TLE);
+      await selectAndCheck(`MEO ${MEO.name}`, MEO.norad, MEO_TLE);
+    });
+  }
 }
 
-await scenario(
-  'B. StrictMode: Pool wird beim Einhängen verworfen und neu gebaut',
-  8,
-  async () => {
-    const { leo, meo } = await catalogReady();
-    await selectAndCheck(`LEO ${LEO.name}`, leo, LEO_TLE);
-    await selectAndCheck(`MEO ${MEO.name}`, meo, MEO_TLE);
-  },
-  { strict: true },
-);
+if (runs('B')) {
+  await scenario(
+    'B. StrictMode: Pool wird beim Einhängen verworfen und neu gebaut',
+    8,
+    async () => {
+      await catalogReady();
+      await selectAndCheck(`LEO ${LEO.name}`, LEO.norad, LEO_TLE);
+      await selectAndCheck(`MEO ${MEO.name}`, MEO.norad, MEO_TLE);
+    },
+    { strict: true },
+  );
+}
 
-await scenario(
-  'C. Katalog wächst nach der Auswahl',
-  8,
-  async () => {
-    // Der Gesamtkatalog kommt erst 1,5 s nach `stations` – die ISS ist da
-    // schon gewählt, und der Pool bekommt 24 neue Objekte dazu.
-    await waitFor('ISS im Katalog', () => indexOf(LEO.norad) >= 0 && telemetry.count > indexOf(LEO.norad));
-    const leo = indexOf(LEO.norad);
-    await selectAndCheck(`LEO ${LEO.name} vor dem Gesamtkatalog`, leo, LEO_TLE);
-    const { meo } = await catalogReady();
-    const after = inspect(leo, LEO_TLE);
-    expect(`LEO ${LEO.name} nach dem Gesamtkatalog ${where(leo)}`, after.ok, after.text);
-    await selectAndCheck(`MEO ${MEO.name}`, meo, MEO_TLE);
-  },
-  { groups: ['stations', 'other'], delays: { active: 1500 } },
-);
+if (runs('C')) {
+  await scenario(
+    'C. Katalog wächst nach der Auswahl',
+    8,
+    async () => {
+      // Der Gesamtkatalog kommt erst 1,5 s nach `stations` – die ISS ist da
+      // schon gewählt, und der Pool bekommt 24 neue Objekte dazu.
+      await waitFor('ISS im Katalog', () => inCatalog(LEO.norad));
+      await selectAndCheck(`LEO ${LEO.name} vor dem Gesamtkatalog`, LEO.norad, LEO_TLE);
+      const leo = useAppStore.getState().selectedIndex ?? -1;
+      await catalogReady();
+      const after = inspect(leo, LEO_TLE);
+      expect(`LEO ${LEO.name} nach dem Gesamtkatalog ${where(leo)}`, after.ok, after.text);
+      await selectAndCheck(`MEO ${MEO.name}`, MEO.norad, MEO_TLE);
+    },
+    { groups: ['stations', 'other'], setup: { delays: { active: 1500 } } },
+  );
+}
 
 /* ------------------------------------------------------------------ */
 /* D: der Fall aus dem Gerätebild                                       */
@@ -515,47 +866,563 @@ const FREEZE_MS = (6 * 60 + 14) * 60_000;
 /** So lange darf der erste Wert nach der Auswahl höchstens brauchen. */
 const FIRST_VALUE_MS = 3000;
 
-for (const [label, tle, key] of [
-  [`LEO ${LEO.name}`, LEO_TLE, 'leo'],
-  [`MEO ${MEO.name}`, MEO_TLE, 'meo'],
-] as const) {
-  await scenario(`D. Prozess friert mitten im Tick ein (iOS: Hintergrund, Display aus), danach Auswahl – ${label}`, 8, async () => {
-    const index = (await catalogReady())[key];
-    const owner = ownerOf(index);
+if (runs('D')) {
+  for (const [label, tle, key, norad] of [
+    [`LEO ${LEO.name}`, LEO_TLE, 'leo', LEO.norad],
+    [`MEO ${MEO.name}`, MEO_TLE, 'meo', MEO.norad],
+  ] as const) {
+    await scenario(`D. Prozess friert mitten im Tick ein (iOS: Hintergrund, Display aus), danach Auswahl – ${label}`, 8, async () => {
+      const index = (await catalogReady())[key];
+      const owner = ownerOf(index);
 
-    // Nacht: iOS hält den Prozess an, während der Shard gerade rechnet.
-    owner.freeze(FREEZE_MS);
-    await waitFor('eingefrorener Tick', () => owner.lastTickDurationMs >= FREEZE_MS);
-    const measuredMs = owner.lastTickDurationMs;
-    const frozenTickAt = owner.lastTickAt;
+      // Nacht: iOS hält den Prozess an, während der Shard gerade rechnet.
+      owner.freeze(FREEZE_MS);
+      await waitFor('eingefrorener Tick', () => owner.lastTickDurationMs >= FREEZE_MS);
+      const measuredMs = owner.lastTickDurationMs;
+      const frozenTickAt = owner.lastTickAt;
 
-    // Morgen: Der Nutzer tippt das Objekt an.
-    const pickedAt = Date.now();
-    await pick(index);
-    const passesArrived = await waitFor('Überflugliste', () => useAppStore.getState().passIndex === index, 20_000);
-    await waitFor(
-      `Bahnhöhe innerhalb von ${FIRST_VALUE_MS} ms`,
-      () => Number.isFinite(readSample(index)?.altitudeKm ?? NaN),
-      FIRST_VALUE_MS,
-    );
-    const firstValueMs = Date.now() - pickedAt;
-    const resumed = owner.lastTickAt > frozenTickAt;
-    const result = inspect(index, tle);
-    expect(
-      `${label} ${where(index)}`,
-      result.ok && passesArrived,
-      `${result.text}; Überflugliste ${passesArrived ? 'geliefert' : 'fehlt'}; ` +
-        `eingefrorener Tick maß ${f(measuredMs / 3_600_000, 2)} h, ` +
-        (resumed
-          ? `Shard danach wieder im Takt, Bahnhöhe ${firstValueMs} ms nach der Auswahl`
-          : `Shard seither ohne Tick`),
-    );
+      // Morgen: Der Nutzer tippt das Objekt an.
+      const pickedAt = Date.now();
+      await chooseByNorad(norad);
+      const passesArrived = await waitFor('Überflugliste', () => useAppStore.getState().passId === norad, 20_000);
+      await waitFor(
+        `Bahnhöhe innerhalb von ${FIRST_VALUE_MS} ms`,
+        () => Number.isFinite(readSample(index)?.altitudeKm ?? NaN),
+        FIRST_VALUE_MS,
+      );
+      const firstValueMs = Date.now() - pickedAt;
+      const resumed = owner.lastTickAt > frozenTickAt;
+      const result = inspect(index, tle);
+      expect(
+        `${label} ${where(index)}`,
+        result.ok && passesArrived,
+        `${result.text}; Überflugliste ${passesArrived ? 'geliefert' : 'fehlt'}; ` +
+          `eingefrorener Tick maß ${f(measuredMs / 3_600_000, 2)} h, ` +
+          (resumed
+            ? `Shard danach wieder im Takt, Bahnhöhe ${firstValueMs} ms nach der Auswahl`
+            : `Shard seither ohne Tick`),
+      );
+    });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Werkzeuge für E–I: was Karte, Spur und Liste zeigen                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Rendert eine DOM-Komponente mit dem aktuellen Store. react-dom/server liest
+ * zustand über den Server-Schnappschuss, und das ist der Anfangszustand des
+ * Stores; der wird hier vorher auf den aktuellen Stand gebracht. Effekte
+ * laufen nicht – die rAF-Felder der Karte bleiben „–“, Name, NORAD-ID und
+ * Überflugbereich stehen im Markup.
+ */
+function serverRender(component: FunctionComponent): string {
+  Object.assign(useAppStore.getInitialState(), useAppStore.getState());
+  return renderToStaticMarkup(createElement(component));
+}
+
+const textOf = (html: string): string =>
+  html
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+/** Kopfzeile der Telemetriekarte, wie sie gerendert wird. */
+const panelText = (): string => textOf(serverRender(TelemetryPanel));
+
+function findLine(store: RootStore): Line2 | null {
+  let line: Line2 | null = null;
+  store.getState().scene.traverse((object) => {
+    if ((object as Line2).isLine2) line = object as Line2;
   });
+  return line;
+}
+
+let frameTime = 0;
+/** Ein Bild der R3F-Wurzel – OrbitTrail aktualisiert die Linie nur in `useFrame`. */
+function frame(store: RootStore): void {
+  frameTime += 1 / 60;
+  advance(frameTime, true, store.getState());
+}
+
+/** Telemetrie des Platzes gegen satellite.js zur Epoche des letzten Ticks seines Shards. */
+function checkTelemetry(slot: number, tle: Tle): { ok: boolean; text: string } {
+  if (slot < 0) return { ok: false, text: 'kein Platz' };
+  const owner = ownerOf(slot);
+  const sample = readSample(slot);
+  const ref = truth(tle, owner.lastTickTime);
+  const ageMs = Date.now() - owner.lastTickAt;
+  if (!sample || !ref) return { ok: false, text: 'kein Telemetriesatz' };
+  const offDeg = angleDeg(direction(sample.azimuth, sample.elevation), direction(ref.azimuth, ref.elevation));
+  const lonDelta = Math.abs(((sample.longitudeDeg - ref.longitudeDeg + 540) % 360) - 180);
+  const ok =
+    offDeg < 0.01 &&
+    Math.abs(sample.rangeKm - ref.rangeKm) < 0.5 &&
+    Math.abs(sample.altitudeKm - ref.altitudeKm) < 0.1 &&
+    Math.abs(sample.latitudeDeg - ref.latitudeDeg) < 0.01 &&
+    lonDelta < 0.01 &&
+    ageMs < STALE_MS;
+  return {
+    ok,
+    text:
+      `Blickrichtung ${f(offDeg, 4)}° neben satellite.js, Distanz ${f(sample.rangeKm)} km (${f(ref.rangeKm)}), ` +
+      `Bahnhöhe ${f(sample.altitudeKm)} km (${f(ref.altitudeKm)}), Subpunkt ${f(sample.latitudeDeg, 2)}° / ` +
+      `${f(sample.longitudeDeg, 2)}° (${f(ref.latitudeDeg, 2)}° / ${f(ref.longitudeDeg, 2)}°), Tick vor ${f(ageMs / 1000, 1)} s`,
+  };
+}
+
+/**
+ * Bahnspur in `trailState` gegen satellite.js. Der Shard rechnet sie zu seiner
+ * Zeit beim Empfang der Anfrage; die liegt zwischen Absenden und Eintreffen.
+ * Geprüft wird zur Mitte dieses Fensters, mit einer Toleranz aus dessen Breite
+ * und 1,2°/s – schneller zieht auch die ISS im Zenit nicht über den Himmel.
+ */
+function checkTrail(tle: Tle, id: string): { ok: boolean; text: string } {
+  const points = trailState.points;
+  const entry = trailLog.findLast((item) => item.points === points);
+  if (trailState.noradId !== id || !points || !entry?.request) {
+    return { ok: false, text: `trailState gehört zu ${trailState.noradId ?? 'niemandem'}` };
+  }
+  const { request } = entry;
+  const windowMs = entry.receivedAt - request.at;
+  const t0 = (entry.receivedAt + request.at) / 2;
+  const tolerance = 0.05 + (1.2 * windowMs) / 2000;
+  const samples = points.length / 3;
+  let worst = 0;
+  for (let i = 0; i < samples; i += 1) {
+    const t = t0 + (request.fromMin + ((request.toMin - request.fromMin) * i) / (samples - 1)) * 60_000;
+    const ref = truth(tle, t);
+    if (!ref) return { ok: false, text: `satellite.js ohne Lösung bei Punkt ${i}` };
+    const point: [number, number, number] = [points[i * 3], points[i * 3 + 1], points[i * 3 + 2]];
+    worst = Math.max(worst, angleDeg(point, direction(ref.azimuth, ref.elevation)));
+  }
+  return {
+    ok: worst < tolerance,
+    text: `${samples} Punkte, größte Abweichung ${f(worst, 3)}° (Toleranz ${f(tolerance, 3)}°, Anfragefenster ${windowMs} ms)`,
+  };
+}
+
+/** Jeder Überflug gegen satellite.js: Elevation im Höchststand und an geschlossenen Enden am Horizont. */
+function checkPasses(passes: PassPrediction[], tle: Tle): { ok: boolean; text: string } {
+  const elevationDeg = (ms: number) => ((truth(tle, ms)?.elevation ?? Number.NaN) * 180) / Math.PI;
+  let worstPeak = 0;
+  let worstEdge = 0;
+  for (const pass of passes) {
+    worstPeak = Math.max(worstPeak, Math.abs(elevationDeg(pass.tca) - pass.maxElevationDeg));
+    if (!pass.aosOpen) worstEdge = Math.max(worstEdge, Math.abs(elevationDeg(pass.aos)));
+    if (!pass.losOpen) worstEdge = Math.max(worstEdge, Math.abs(elevationDeg(pass.los)));
+  }
+  const ok = passes.length > 0 && worstPeak < 0.1 && worstEdge < 0.1;
+  return {
+    ok,
+    text:
+      `${passes.length} Überflüge, Höchststand bis ${f(worstPeak, 3)}° neben satellite.js, ` +
+      `Auf-/Untergang bis ${f(worstEdge, 3)}° vom Horizont`,
+  };
+}
+
+/**
+ * Das Kernstück von E–I: Zeigt alles, was an der Auswahl hängt, genau dieses
+ * Objekt? Gewartet wird, bis alle Kanäle stimmen (höchstens 20 s); danach
+ * meldet jede Prüfung ihren Befund – auch den falschen.
+ */
+async function verifyShown(label: string, target: Target): Promise<void> {
+  const channels = () => {
+    const state = useAppStore.getState();
+    const slot = state.selectedIndex ?? -1;
+    return {
+      state,
+      slot,
+      meta: catalogIndex.meta[slot],
+      telemetry: checkTelemetry(slot, target.tle),
+      trail: checkTrail(target.tle, target.id),
+      passes: checkPasses(state.passId === target.id ? state.passes : [], target.tle),
+    };
+  };
+  await waitFor(
+    `${label}: alle Kanäle`,
+    () => {
+      const c = channels();
+      return c.meta?.noradId === target.id && c.telemetry.ok && c.trail.ok && c.passes.ok && !c.state.passPending;
+    },
+    20_000,
+  );
+  const c = channels();
+  expect(
+    `${label}: Identität ${where(c.slot)}`,
+    c.state.selectedId === target.id &&
+      c.meta?.noradId === target.id &&
+      c.meta?.name === target.name &&
+      c.state.selectedMeta === c.meta,
+    `gewählt ${c.state.selectedId}; Platz #${c.slot} trägt ${c.meta ? `${c.meta.name} (NORAD ${c.meta.noradId})` : 'nichts'}`,
+  );
+  const text = panelText();
+  expect(
+    `${label}: Karte`,
+    text.includes(target.name) && text.includes(`NORAD ${target.id}`) && !text.includes('nicht im geladenen Katalog'),
+    `„${text.slice(0, 70)} …“`,
+  );
+  expect(`${label}: Telemetrie`, c.telemetry.ok, c.telemetry.text);
+  expect(`${label}: Bahnspur`, c.trail.ok, c.trail.text);
+  expect(`${label}: Überflüge`, c.state.passId === target.id && c.passes.ok, c.passes.text);
+}
+
+/* ------------------------------------------------------------------ */
+/* E: Auswahl per NORAD-ID                                              */
+/* ------------------------------------------------------------------ */
+
+if (runs('E')) {
+  // 3 Kerne → 2 Shards, 8 Kerne → 6 Shards: BEIDOU-3 M16 liegt je auf einem
+  // anderen Shard als die ISS, das Routing muss also wirklich auflösen.
+  for (const cores of [3, 8]) {
+    await scenario(
+      'E. Auswahl per NORAD-ID: Karte, Telemetrie, Bahnspur und Überflüge gehören zu genau diesem Objekt',
+      cores,
+      async () => {
+        await waitFor('Katalog mit LEO und MEO', () => inCatalog(LEO.norad) && inCatalog(MEO.norad));
+        await chooseByNorad(LEO.norad);
+        await verifyShown(`LEO ${LEO.name}`, LEO_T);
+        await chooseByNorad(MEO.norad);
+        await verifyShown(`MEO ${MEO.name}`, MEO_T);
+
+        // Noch einmal dasselbe Objekt (Liste, Tap): Die Überflugliste bleibt.
+        // Der Hook fordert nur bei neuer ID oder neuen Bahndaten an – eine hier
+        // geleerte Liste käme nie wieder.
+        const before = useAppStore.getState();
+        await chooseByNorad(MEO.norad);
+        await settle();
+        const after = useAppStore.getState();
+        expect(
+          'erneute Wahl desselben Objekts',
+          after.passId === MEO.norad && after.passes === before.passes && !after.passPending,
+          `Liste gehört zu ${after.passId}, ${after.passes === before.passes ? 'dieselbe' : 'eine andere'} Liste, ` +
+            `ausstehend ${after.passPending}`,
+        );
+      },
+      { scene: true, setup: { feed: FEED_FULL } },
+    );
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* F: Plätze verschieben sich                                           */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Innerhalb eines Pools verschiebt sich kein Platz: Der Fallback-Ersatz
+ * bleibt an Ort und Stelle (F1), eine nachgeladene Gruppe wird angehängt (H2).
+ * Neu vergeben werden Plätze erst von einem neuen Pool – beim Neustart, in dem
+ * eine gemerkte Auswahl wieder aufgelöst werden muss (F2).
+ *
+ * Gegenprobe gegen den alten Stand, 24.09.2026: In F2 zeigt er vor dem
+ * Neuaufbau auf allen fünf Kanälen BEIDOU-3 M16, danach die Karte „FILL 16
+ * NORAD 60016“, Telemetrie 79,6° neben BEIDOU-3 M16 (Bahnhöhe 491 statt
+ * 21 513 km) und die Spur von 60016. In F1 bleibt seine Überflugliste die aus
+ * dem Fallback-Satz von 2025 – Höchststände bis 170,7° neben dem frischen
+ * Satz, eine einzige Anfrage.
+ */
+
+if (runs('F')) {
+  await scenario(
+    'F1. Fallback-Ersatz beim Start: gleicher Platz, neue Bahndaten',
+    8,
+    async () => {
+      // Die vier Kernobjekte des Offline-Fallbacks (Epoche 2025) stehen sofort
+      // im Katalog; die ISS wird gewählt, bevor `stations` sie durch den
+      // frischen Satz ersetzt. Danach müssen Telemetrie, Spur und Überflüge
+      // aus dem frischen Satz stammen – auch die Überflugliste, die zunächst
+      // aus dem Fallback gerechnet wurde.
+      await waitFor('Fallback-ISS im Katalog', () => inCatalog(LEO.norad));
+      const fallbackSlot = indexOf(LEO.norad);
+      const fallbackMeta = catalogIndex.meta[fallbackSlot];
+      await chooseByNorad(LEO.norad);
+      await verifyShown(`LEO ${LEO.name} nach dem Ersatz`, LEO_T);
+      const passRequests = requestLog.filter((entry) => entry.type === 'pass' && entry.noradId === LEO.norad).length;
+      expect(
+        'Platz bleibt, Bahndaten und Überflugsuche wechseln',
+        indexOf(LEO.norad) === fallbackSlot && catalogIndex.meta[fallbackSlot] !== fallbackMeta && passRequests >= 2,
+        `Fallback-ISS #${fallbackSlot}, frische ISS #${indexOf(LEO.norad)}, Metadaten ` +
+          `${catalogIndex.meta[fallbackSlot] !== fallbackMeta ? 'ersetzt' : 'unverändert'}, ${passRequests} Überflug-Anfragen`,
+      );
+    },
+    { scene: true, groups: ['stations', 'other'], setup: { feed: FEED_FULL, delays: { stations: 1500 } } },
+  );
+
+  console.log('F2. Neu aufgebauter Pool legt dieselben Objekte auf andere Plätze – 8 Kerne');
+  setCores(8);
+  // Erster Pool: CelesTrak drosselt Starlink, das Nachladen käme erst nach
+  // 60 s. Der Gesamtkatalog rückt direkt hinter Fallback und Raumstationen.
+  poolSetup = { ...DEFAULT_SETUP, feed: FEED_FULL, failCalls: { starlink: 1_000 }, shortWaits: true, retryMs: 60_000 };
+  useAppStore.setState({ observer: null, ...CLEAR_SELECTION, errors: [], activeGroups: ['stations', 'starlink', 'other'] });
+  let mounted = await mount(createElement(Scene));
+  await setStore({ observer: OBSERVER });
+  await waitFor('BEIDOU-3 M16 im ersten Katalog', () => inCatalog(MEO.norad));
+  const starlinkFailed = useAppStore.getState().errors.some((message) => message.startsWith('Starlink'));
+  const slotBefore = indexOf(MEO.norad);
+  await chooseByNorad(MEO.norad);
+  await verifyShown(`MEO ${MEO.name} im ersten Pool`, MEO_T);
+  await mounted.unmount();
+
+  // Zweiter Pool – wie ein Neustart mit gemerkter Auswahl: Der Store behält
+  // sie, die Worker fangen von vorn an, und diesmal lädt Starlink sofort.
+  poolSetup = { ...poolSetup, failCalls: {} };
+  mounted = await mount(createElement(Scene));
+  await setStore({ observer: OBSERVER });
+  await waitFor('BEIDOU-3 M16 im zweiten Katalog', () => inCatalog(MEO.norad));
+  const slotAfter = indexOf(MEO.norad);
+  const occupant = catalogIndex.meta[slotBefore];
+  expect(
+    'Voraussetzung: der Platz hat sich verschoben',
+    starlinkFailed && slotAfter !== slotBefore && occupant !== undefined && occupant.noradId !== MEO.norad,
+    `Starlink im ersten Pool ${starlinkFailed ? 'fehlgeschlagen' : 'geladen'}; BEIDOU-3 M16 erst ${where(slotBefore)}, ` +
+      `jetzt ${where(slotAfter)}; auf #${slotBefore} steht jetzt ${occupant?.name ?? 'nichts'}`,
+  );
+  await verifyShown(`MEO ${MEO.name} nach dem Neuaufbau`, MEO_T);
+  await mounted.unmount();
+  await setStore({ ...CLEAR_SELECTION });
+}
+
+/* ------------------------------------------------------------------ */
+/* G: verspätete Antworten                                              */
+/* ------------------------------------------------------------------ */
+
+if (runs('G')) {
+  await scenario(
+    'G. Verspätete Bahnspur- und Überflug-Antworten für das vorige Objekt werden verworfen',
+    8,
+    async ({ store }) => {
+      await waitFor('Katalog mit LEO und MEO', () => inCatalog(LEO.norad) && inCatalog(MEO.norad));
+      const isFor = (id: string) => (data: ShardMessage) =>
+        (data?.type === 'trail' || data?.type === 'pass') && data.noradId === id;
+      const heldFor = (id: string) => held.filter((item) => isFor(id)(item.data)).length;
+
+      // G1: A antwortet erst, nachdem B schon geantwortet hat.
+      holdFilter = isFor(LEO.norad);
+      await chooseByNorad(LEO.norad);
+      await waitFor('Spur und Überflüge der ISS zurückgehalten', () => heldFor(LEO.norad) >= 2);
+      await chooseByNorad(MEO.norad);
+      await verifyShown(`G1 MEO ${MEO.name}`, MEO_T);
+      const passesB = useAppStore.getState().passes;
+      const pointsB = trailState.points;
+      const releasedA = await act(async () => releaseHeld(isFor(LEO.norad)));
+      holdFilter = null;
+      frame(store);
+      const afterA = useAppStore.getState();
+      const line = findLine(store);
+      expect(
+        'G1 Überflugliste bleibt die von B',
+        releasedA === 2 && afterA.passId === MEO.norad && afterA.passes === passesB && !afterA.passPending,
+        `${releasedA} Antworten der ISS nachgereicht; Liste gehört zu ${afterA.passId}, ${afterA.passes === passesB ? 'dieselbe' : 'eine andere'} Liste`,
+      );
+      expect(
+        'G1 Bahnspur bleibt die von B',
+        trailState.noradId === MEO.norad && trailState.points === pointsB && line?.visible === true,
+        `trailState gehört zu ${trailState.noradId}, ${trailState.points === pointsB ? 'dieselben' : 'andere'} Punkte, Linie ${line?.visible ? 'sichtbar' : 'verborgen'}`,
+      );
+
+      // G2: A antwortet nach der Auswahl von B, aber bevor B antwortet.
+      await clearSelection();
+      holdFilter = (data) => isFor(LEO.norad)(data) || isFor(MEO.norad)(data);
+      await chooseByNorad(LEO.norad);
+      await waitFor('Antworten zur ISS zurückgehalten', () => heldFor(LEO.norad) >= 2);
+      await chooseByNorad(MEO.norad);
+      await waitFor('Antworten zu BEIDOU-3 M16 zurückgehalten', () => heldFor(MEO.norad) >= 2);
+      const releasedEarly = await act(async () => releaseHeld(isFor(LEO.norad)));
+      frame(store);
+      const early = useAppStore.getState();
+      expect(
+        'G2 Antworten zur ISS landen nicht bei BEIDOU-3 M16',
+        releasedEarly === 2 &&
+          early.passId === null &&
+          early.passes.length === 0 &&
+          early.passPending &&
+          trailState.noradId === null &&
+          findLine(store)?.visible === false,
+        `${releasedEarly} Antworten nachgereicht; Überflüge von ${early.passId ?? 'niemandem'} (${early.passes.length}), ` +
+          `ausstehend ${early.passPending}, Spur von ${trailState.noradId ?? 'niemandem'}, Linie ${findLine(store)?.visible ? 'sichtbar' : 'verborgen'}`,
+      );
+      await act(async () => releaseHeld(isFor(MEO.norad)));
+      holdFilter = null;
+      await verifyShown(`G2 MEO ${MEO.name}, danach`, MEO_T);
+
+      // G3: OrbitTrail selbst zeichnet nur die Spur der gewählten ID – auch
+      // wenn trailState (von Hand) die eines anderen Objekts trägt.
+      frame(store);
+      const shownBefore = findLine(store)?.visible === true;
+      const saved = { noradId: trailState.noradId, points: trailState.points };
+      trailState.noradId = LEO.norad as typeof trailState.noradId;
+      trailState.points = new Float32Array(saved.points ?? new Float32Array(0));
+      trailState.version += 1;
+      frame(store);
+      const hiddenForeign = findLine(store)?.visible === false;
+      trailState.noradId = saved.noradId;
+      trailState.points = saved.points;
+      trailState.version += 1;
+      frame(store);
+      expect(
+        'G3 OrbitTrail verbirgt eine Spur, die nicht zur Auswahl gehört',
+        shownBefore && hiddenForeign && findLine(store)?.visible === true,
+        `vorher ${shownBefore ? 'sichtbar' : 'verborgen'}, mit Spur der ISS ${hiddenForeign ? 'verborgen' : 'sichtbar'}, ` +
+          `danach wieder ${findLine(store)?.visible ? 'sichtbar' : 'verborgen'}`,
+      );
+    },
+    { scene: true, setup: { feed: FEED_FULL } },
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* H: nicht auflösbare ID                                               */
+/* ------------------------------------------------------------------ */
+
+/** HUD im Server-Rendering: Ist das Radar auf Telefonbreite ausgeblendet (`hidden sm:flex`)? */
+const radarHiddenOnPhone = (): boolean => /class="[^"]*\bhidden sm:flex/.test(serverRender(Hud));
+
+/** Befund für eine gewählte, aber nicht aufgelöste ID. */
+function checkUnresolved(label: string, id: string): void {
+  const state = useAppStore.getState();
+  const text = panelText();
+  const requests = requestLog.filter((entry) => entry.noradId === id && entry.type !== 'select').length;
+  expect(
+    `${label}: Auswahl bleibt stehen`,
+    state.selectedId === id && state.selectedIndex === -1 && state.selectedMeta === null,
+    `gewählt ${state.selectedId}, Platz ${state.selectedIndex}`,
+  );
+  expect(
+    `${label}: Karte sagt, dass das Objekt fehlt`,
+    text.includes(`NORAD ${id}`) &&
+      text.includes('nicht im geladenen Katalog') &&
+      text.includes('Folgt, sobald das Objekt im Katalog steht') &&
+      radarHiddenOnPhone(),
+    `„${text.slice(0, 110)} …“; Radar auf Telefonbreite ${radarHiddenOnPhone() ? 'ausgeblendet' : 'sichtbar'}`,
+  );
+  expect(
+    `${label}: nichts von einem anderen Objekt`,
+    readSample(state.selectedIndex ?? -1) === null &&
+      state.passes.length === 0 &&
+      trailState.noradId === null &&
+      requests === 0,
+    `Telemetrie ${readSample(state.selectedIndex ?? -1) ? 'vorhanden' : 'keine'}, ${state.passes.length} Überflüge, ` +
+      `Spur von ${trailState.noradId ?? 'niemandem'}, ${requests} Spur-/Überflug-Anfragen an Shards`,
+  );
+}
+
+if (runs('H')) {
+  await scenario(
+    'H. Nicht auflösbare ID: bleibt gewählt, löst sich auf, sobald die fehlgeschlagene Gruppe nachgeladen ist',
+    8,
+    async () => {
+      await waitFor('BEIDOU-3 M16 im Katalog', () => inCatalog(MEO.norad));
+      const starlinkFailed = useAppStore.getState().errors.some((message) => message.startsWith('Starlink'));
+
+      // H1: eine ID, die es in keiner Gruppe gibt.
+      await chooseByNorad('88888');
+      await settle();
+      checkUnresolved('H1 NORAD 88888', '88888');
+
+      // H2: ein Starlink-Objekt, dessen Gruppe beim ersten Abruf scheiterte.
+      await chooseByNorad(MEO.norad);
+      const meoSlot = useAppStore.getState().selectedIndex;
+      await chooseByNorad(STARLINK_T3.id);
+      await settle();
+      expect(
+        'H2 Voraussetzung: Starlink fehlt noch',
+        starlinkFailed && !inCatalog(STARLINK_T3.id),
+        `Starlink ${starlinkFailed ? 'fehlgeschlagen' : 'geladen'}, ${STARLINK_T3.name} ${inCatalog(STARLINK_T3.id) ? 'schon' : 'nicht'} im Katalog`,
+      );
+      checkUnresolved(`H2 ${STARLINK_T3.name}`, STARLINK_T3.id);
+      // Das Nachladen nach 45 s ist auf 2,5 s gestaucht.
+      await verifyShown(`H2 ${STARLINK_T3.name} nach dem Nachladen`, STARLINK_T3);
+      expect(
+        'H2 nachgeladene Gruppe verschiebt keinen bestehenden Platz',
+        indexOf(MEO.norad) === meoSlot,
+        `BEIDOU-3 M16 vorher #${meoSlot}, nachher #${indexOf(MEO.norad)}; Starlink angehängt ab #${indexOf(STARLINKS[0].norad)}`,
+      );
+    },
+    {
+      scene: true,
+      groups: ['stations', 'starlink', 'other'],
+      setup: { feed: FEED_FULL, failCalls: { starlink: 3 }, shortWaits: true, retryMs: 2500 },
+    },
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* I: Alpha-5                                                           */
+/* ------------------------------------------------------------------ */
+
+if (runs('I')) {
+  console.log('I. Alpha-5-Kennung A0001 = NORAD 100001');
+  const normalize = (tleSources as { normalizeNoradId?: (field: string) => string }).normalizeNoradId;
+  const samples = ['A0001', 'a0001', '00005', '  900', '25544', 'Z9999', '100001'];
+  const once = samples.map((value) => normalize?.(value));
+  const twice = once.map((value) => (value === undefined ? undefined : normalize?.(value)));
+  expect(
+    'normalizeNoradId ist idempotent',
+    normalize !== undefined && once[0] === '100001' && once.every((value, i) => value === twice[i]),
+    samples.map((value, i) => `${value.trim()} → ${once[i]} → ${twice[i]}`).join(', '),
+  );
+
+  await scenario(
+    'I. Alpha-5 über Liste, Tap und rohe Kennung',
+    8,
+    async ({ canvas, store }) => {
+      await waitFor('Alpha-5-Objekt im Katalog', () =>
+        useAppStore.getState().catalog.some((meta) => meta.name === ALPHA5.name),
+      );
+      await settle();
+
+      // Liste: SatelliteDrawer wählt `row.meta.noradId` aus dem Store-Katalog.
+      const row = useAppStore.getState().catalog.find((meta) => meta.name === ALPHA5.name);
+      expect('I1 Katalog führt die normalisierte Kennung', row?.noradId === ALPHA5_T.id, `Liste zeigt NORAD ${row?.noradId}`);
+      await chooseByNorad(row?.noradId ?? '');
+      await verifyShown('I1 aus der Liste', ALPHA5_T);
+      await setStore({ drawerOpen: true, filters: { mode: 'all', includeBelowHorizon: true, query: ALPHA5_T.id } });
+      const drawer = serverRender(SatelliteDrawer);
+      await setStore({ drawerOpen: false, filters: { mode: 'all', includeBelowHorizon: false, query: '' } });
+      const rowStyle = new RegExp(`<button[^>]*style="([^"]*)"[^>]*>(?:(?!</button>).)*${ALPHA5.name}`).exec(drawer)?.[1] ?? '';
+      expect(
+        'I1 Liste markiert die Zeile als gewählt',
+        rowStyle.includes('var(--accent) 14%'),
+        `Suche „${ALPHA5_T.id}“, Zeilenstil „${rowStyle}“`,
+      );
+
+      // Tap: Kamera auf das Objekt, Tipp in die Bildmitte.
+      await clearSelection();
+      const slot = indexOf(ALPHA5_T.id);
+      const sample = readSample(slot);
+      const camera = store.getState().camera as PerspectiveCamera;
+      if (sample) {
+        camera.position.set(0, 0, 0);
+        camera.up.set(0, 1, 0);
+        camera.lookAt(...direction(sample.azimuth, sample.elevation));
+        camera.updateMatrixWorld(true);
+        camera.updateProjectionMatrix();
+      }
+      await act(async () => {
+        canvas.dispatch('pointerdown', { clientX: 200, clientY: 400 });
+        canvas.dispatch('pointerup', { clientX: 200, clientY: 400 });
+      });
+      expect(
+        'I2 Tap trifft das Alpha-5-Objekt',
+        useAppStore.getState().selectedId === ALPHA5_T.id,
+        `Objekt bei ${f((sample?.elevation ?? NaN) * RAD, 1)}° Elevation, gewählt ${useAppStore.getState().selectedId}`,
+      );
+      await verifyShown('I2 per Tap', ALPHA5_T);
+
+      // Roh: die Kennung, wie sie in der TLE-Zeile steht.
+      await clearSelection();
+      await chooseByNorad('A0001');
+      await verifyShown('I3 als „A0001“', ALPHA5_T);
+    },
+    { scene: true, setup: { feed: FEED_FULL } },
+  );
 }
 
 console.log(`${checks} Prüfungen, ${failures} Fehlschläge`);
 for (const worker of liveWorkers) worker.terminate();
 if (failures > 0) process.exit(1);
-console.log('✓ Bahnhöhe und Subpunkt des gewählten Objekts kommen an');
+console.log('✓ Auswahl hängt an der NORAD-ID; Bahnhöhe, Subpunkt, Spur und Überflüge gehören zum gewählten Objekt');
 // Der Scheduler von React hält den Prozess sonst offen.
 process.exit(0);

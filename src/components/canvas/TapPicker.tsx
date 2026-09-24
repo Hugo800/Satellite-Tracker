@@ -12,7 +12,6 @@ import {
 import { passesSkyFilter } from '../../math/visibility';
 import { catalogIndex, telemetry } from '../../state/runtime';
 import { useAppStore } from '../../state/store';
-import { engine } from '../../hooks/useSatelliteEngine';
 
 const TAP_MOVE_TOLERANCE_PX = 12;
 const TAP_DURATION_MS = 450;
@@ -108,12 +107,10 @@ export function TapPicker(): null {
         }
       }
 
-      if (bestIndex >= 0) {
-        select(bestIndex);
-        engine.requestPass(bestIndex);
-      } else {
-        select(null);
-      }
+      // Die Suche läuft über Plätze; erst der Treffer wird in seine Identität
+      // übersetzt – einmal, O(1). Die Überflugliste fordert
+      // useSatelliteEngine an, sobald die Auswahl steht.
+      select(bestIndex >= 0 ? (catalogIndex.meta[bestIndex]?.noradId ?? null) : null);
     };
 
     const onPointerCancel = () => {

@@ -1,4 +1,4 @@
-import type { SatelliteGroup } from '../types';
+import type { NoradId, SatelliteGroup } from '../types';
 
 export interface TleSource {
   group: SatelliteGroup;
@@ -117,4 +117,18 @@ export function decodeAlpha5(field: string): string {
   const rest = Number(raw.slice(1));
   if (!Number.isFinite(rest)) return raw;
   return String((offset + 10) * 10000 + rest);
+}
+
+/**
+ * Die eine Schreibweise, in der eine NORAD-ID als Identität gilt.
+ *
+ * Auswahl, Bahnspur und Überflüge hängen an der NORAD-ID. Jede Kennung muss
+ * deshalb auf demselben Weg in diese Form kommen – sonst fände `A0001` aus
+ * einer TLE-Zeile das Objekt `100001` im Katalog nicht und `00005` nicht `5`.
+ * Der Worker normalisiert beim Einlesen, der Store bei jeder Auswahl. Das ist
+ * idempotent: Eine schon normalisierte Kennung bleibt, wie sie ist
+ * (scripts/verify-selection.ts, Abschnitt I).
+ */
+export function normalizeNoradId(field: string): NoradId {
+  return decodeAlpha5(field) as NoradId;
 }

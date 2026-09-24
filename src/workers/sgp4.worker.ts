@@ -5,8 +5,12 @@
  * Jede Instanz sieht denselben, in identischer Reihenfolge aufgebauten Katalog
  * und ist für die globalen Indizes mit `index % shardCount === shardIndex`
  * zuständig. Weil die Zuteilung rein über den Modulo läuft, bleiben alle
- * Indizes stabil, während der Katalog wächst – ein nachgeladener Gesamtkatalog
- * verschiebt keine bestehende Auswahl und keine laufende Bahnspur.
+ * Indizes stabil, während der Katalog wächst.
+ *
+ * Nach außen spricht der Shard trotzdem NORAD-IDs: Auswahl, Bahnspur und
+ * Überflug kommen als ID herein und gehen als ID hinaus. Welcher Platz dazu
+ * gehört, weiß nur dieser Katalog (`knownIds`) – ein neu aufgebauter Pool
+ * vergibt die Plätze anders.
  *
  * Shard 0 ist zusätzlich der Lader: Nur er ruft CelesTrak ab (sonst liefen N
  * parallele Abrufe derselben URL ins Rate-Limit) und reicht den Rohtext über
@@ -22,7 +26,7 @@ import {
   GROUP_LOAD_ORDER,
   HIGHLIGHT_NORAD_IDS,
   TLE_SOURCES,
-  decodeAlpha5,
+  normalizeNoradId,
 } from '../data/tleSources';
 import { geoToObserverGd, normalizeAngle } from '../math/coords';
 import {
@@ -49,6 +53,7 @@ import {
 } from '../math/telemetryLayout';
 import type {
   GeoCoord,
+  NoradId,
   ObserverGd,
   SatelliteGroup,
   SatelliteMeta,
@@ -92,15 +97,21 @@ let isLoader = true;
  */
 const own: Array<Entry | null> = [];
 /** Globaler Index je NORAD-ID – in *jedem* Shard identisch aufgebaut. */
-const knownIds = new Map<string, number>();
+const knownIds = new Map<NoradId, number>();
 /** Aus dem Offline-Fallback erzeugte IDs, die echte Daten überschreiben dürfen. */
-const provisionalIds = new Set<string>();
+const provisionalIds = new Set<NoradId>();
 let nextIndex = 0;
 
 let observer: ObserverGd | null = null;
 let observerFrame: ObserverFrame | null = null;
-/** Globaler Index des ausgewählten Objekts, oder -1. */
-let selectedIndex = -1;
+/** Ausgewähltes Objekt, oder null. */
+let selectedId: NoradId | null = null;
+/**
+ * Eigener Slot des ausgewählten Objekts, oder -1 (nichts gewählt, anderer
+ * Shard, ID noch unbekannt). Aufgelöst bei der Auswahl und nach jedem
+ * Einlesen, nicht je Tick – `tick()` vergleicht damit nur Zahlen.
+ */
+let selectedSlot = -1;
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -130,6 +141,21 @@ function virtualNow(): number {
 const ownSlotFor = (globalIndex: number): number => (globalIndex - shardIndex) / shardCount;
 const isMine = (globalIndex: number): boolean => globalIndex % shardCount === shardIndex;
 
+/** Eigener Slot einer NORAD-ID, oder -1, wenn ein anderer Shard sie führt oder sie unbekannt ist. */
+function ownSlotOf(noradId: NoradId): number {
+  const index = knownIds.get(noradId);
+  return index !== undefined && isMine(index) ? ownSlotFor(index) : -1;
+}
+
+/**
+ * Die Auswahl kann eine ID nennen, die erst mit einer späteren Gruppe
+ * eintrifft. Deshalb auch nach jedem Einlesen neu auflösen – sonst blieben
+ * Subpunkt und Bahnhöhe des Objekts NaN, bis jemand neu wählt.
+ */
+function resolveSelectedSlot(): void {
+  selectedSlot = selectedId === null ? -1 : ownSlotOf(selectedId);
+}
+
 /* ------------------------------------------------------------------ */
 /* Katalog                                                              */
 /* ------------------------------------------------------------------ */
@@ -137,7 +163,7 @@ const isMine = (globalIndex: number): boolean => globalIndex % shardCount === sh
 function makeMeta(
   index: number,
   name: string,
-  noradId: string,
+  noradId: NoradId,
   group: SatelliteGroup,
   satrec: SatRec,
 ): SatelliteMeta {
@@ -174,7 +200,7 @@ function parseTle(text: string, group: SatelliteGroup): SatelliteMeta[] {
     const l2 = lines[i + 2];
     if (!l1 || !l2 || !l1.startsWith('1 ') || !l2.startsWith('2 ')) continue;
 
-    const noradId = decodeAlpha5(l1.slice(2, 7));
+    const noradId = normalizeNoradId(l1.slice(2, 7));
     if (!noradId) continue;
     // Der Dreierblock ist verbraucht – die beiden Elementzeilen nicht erneut prüfen.
     i += 2;
@@ -223,6 +249,7 @@ function parseTle(text: string, group: SatelliteGroup): SatelliteMeta[] {
 
 function ingest(text: string, group: SatelliteGroup): void {
   const added = parseTle(text, group);
+  resolveSelectedSlot();
   post({
     type: 'catalog',
     shardIndex,
@@ -308,7 +335,7 @@ async function loadGroups(groups: SatelliteGroup[]): Promise<void> {
     // Sofort etwas Sichtbares: Kernobjekte aus dem eingebauten Katalog. Sie
     // werden an Ort und Stelle durch echte Daten ersetzt, sobald sie eintreffen.
     for (const line of FALLBACK_TLE.split(/\r?\n/)) {
-      if (line.startsWith('1 ')) provisionalIds.add(decodeAlpha5(line.slice(2, 7)));
+      if (line.startsWith('1 ')) provisionalIds.add(normalizeNoradId(line.slice(2, 7)));
     }
     post({ type: 'tle', group: 'stations', text: FALLBACK_TLE });
     ingest(FALLBACK_TLE, 'stations');
@@ -408,9 +435,10 @@ function tick(): number {
   const count = own.length;
   const buffer = takeBuffer(count * TELEMETRY_STRIDE * 4);
 
-  // Nur der eigene Slot des ausgewählten Objekts braucht den Subpunkt.
-  const selectedSlot =
-    selectedIndex >= 0 && isMine(selectedIndex) ? ownSlotFor(selectedIndex) : -1;
+  // Nur der eigene Slot des ausgewählten Objekts braucht den Subpunkt. Als
+  // lokale Konstante, wie vor der Umstellung auf IDs: Die Schleife liest ihn
+  // je Objekt.
+  const selected = selectedSlot;
 
   for (let k = 0; k < count; k += 1) {
     const base = k * TELEMETRY_STRIDE;
@@ -424,7 +452,7 @@ function tick(): number {
         entry.meta.standardMagnitude,
         buffer,
         base,
-        k === selectedSlot,
+        k === selected,
         OFFSETS,
       )
     ) {
@@ -498,9 +526,10 @@ function schedule(): void {
 /* Bahnspur                                                             */
 /* ------------------------------------------------------------------ */
 
-function buildTrail(index: number, fromMin: number, toMin: number, samples: number): void {
-  if (!isMine(index)) return;
-  const entry = own[ownSlotFor(index)];
+function buildTrail(noradId: NoradId, fromMin: number, toMin: number, samples: number): void {
+  const slot = ownSlotOf(noradId);
+  if (slot < 0) return;
+  const entry = own[slot];
   if (!entry || !observer || samples < 2) return;
 
   const points = new Float32Array(samples * 3);
@@ -519,7 +548,7 @@ function buildTrail(index: number, fromMin: number, toMin: number, samples: numb
     points[i * 3 + 2] = -cosEl * Math.cos(az);
   }
 
-  post({ type: 'trail', index, points }, [points.buffer]);
+  post({ type: 'trail', noradId, points }, [points.buffer]);
 }
 
 /* ------------------------------------------------------------------ */
@@ -545,7 +574,7 @@ ctx.onmessage = (event: MessageEvent<WorkerRequest>) => {
       if (!isLoader) {
         if (msg.group === 'stations' && nextIndex === 0) {
           for (const line of msg.text.split(/\r?\n/)) {
-            if (line.startsWith('1 ')) provisionalIds.add(decodeAlpha5(line.slice(2, 7)));
+            if (line.startsWith('1 ')) provisionalIds.add(normalizeNoradId(line.slice(2, 7)));
           }
         }
         ingest(msg.text, msg.group);
@@ -575,7 +604,8 @@ ctx.onmessage = (event: MessageEvent<WorkerRequest>) => {
       break;
 
     case 'select':
-      selectedIndex = msg.index ?? -1;
+      selectedId = msg.noradId;
+      resolveSelectedSlot();
       break;
 
     case 'recycle':
@@ -584,14 +614,15 @@ ctx.onmessage = (event: MessageEvent<WorkerRequest>) => {
       break;
 
     case 'trail':
-      buildTrail(msg.index, msg.fromMin, msg.toMin, msg.samples);
+      buildTrail(msg.noradId, msg.fromMin, msg.toMin, msg.samples);
       break;
 
     case 'pass': {
-      if (!isMine(msg.index)) break;
-      const entry = own[ownSlotFor(msg.index)];
+      const slot = ownSlotOf(msg.noradId);
+      if (slot < 0) break;
+      const entry = own[slot];
       if (!entry || !observer) {
-        post({ type: 'pass', index: msg.index, passes: [] });
+        post({ type: 'pass', noradId: msg.noradId, passes: [] });
         break;
       }
       const passes = predictPasses(entry.satrec, observer, {
@@ -601,7 +632,7 @@ ctx.onmessage = (event: MessageEvent<WorkerRequest>) => {
         minElevationDeg: 1,
         standardMagnitude: entry.meta.standardMagnitude,
       });
-      post({ type: 'pass', index: msg.index, passes });
+      post({ type: 'pass', noradId: msg.noradId, passes });
       break;
     }
   }

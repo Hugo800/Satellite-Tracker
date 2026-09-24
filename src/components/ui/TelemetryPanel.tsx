@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Crosshair, Eye, EyeOff, Radio, Timer, X } from 'lucide-react';
 import { RAD, compassLabel } from '../../math/coords';
-import { catalogIndex, readSample, requestFocus } from '../../state/runtime';
+import { readSample, requestFocus } from '../../state/runtime';
 import { useAppStore } from '../../state/store';
 import {
   formatClockShort,
@@ -123,9 +123,11 @@ function PassRow({ pass, running }: { pass: PassPrediction; running: boolean }):
  * dadurch bleibt der React-Baum bei 10 Hz Telemetrie komplett re-render-frei.
  */
 export function TelemetryPanel(): React.JSX.Element | null {
+  const selectedId = useAppStore((s) => s.selectedId);
+  // Platz der Auswahl im aktuellen Katalog; -1, solange die ID dort fehlt.
   const selectedIndex = useAppStore((s) => s.selectedIndex);
-  // Weckt die Karte, sobald die Metadaten des gewählten Objekts eintreffen.
-  const catalogVersion = useAppStore((s) => s.catalogVersion);
+  // Metadaten genau dieser ID (store.ts) – weckt die Karte, sobald sie eintreffen.
+  const meta = useAppStore((s) => s.selectedMeta);
   const passes = useAppStore((s) => s.passes);
   const passPending = useAppStore((s) => s.passPending);
   const select = useAppStore((s) => s.select);
@@ -141,7 +143,18 @@ export function TelemetryPanel(): React.JSX.Element | null {
   const countdownRef = useRef<HTMLSpanElement | null>(null);
 
   useEffect(() => {
-    if (selectedIndex === null) return;
+    // Die Felder sind dieselben DOM-Knoten wie für das vorige Objekt, und die
+    // Schleife unten überschreibt sie erst mit dem ersten Satz des neuen. Ohne
+    // Zurücksetzen stünden bis dahin – bei einer nicht auflösbaren ID auf
+    // Dauer – die Werte des vorigen Objekts unter dem neuen Namen.
+    for (const ref of [elevationRef, azimuthRef, altitudeRef, rangeRef, speedRef, subPointRef]) {
+      if (ref.current) ref.current.textContent = '–';
+    }
+    if (lightRef.current) {
+      lightRef.current.textContent = '–';
+      lightRef.current.style.color = '';
+    }
+    if (selectedIndex === null || selectedIndex < 0) return;
     let frame = 0;
 
     const update = () => {
@@ -176,7 +189,9 @@ export function TelemetryPanel(): React.JSX.Element | null {
 
     frame = requestAnimationFrame(update);
     return () => cancelAnimationFrame(frame);
-  }, [selectedIndex, expanded]);
+    // `selectedId` löst das Zurücksetzen auch dann aus, wenn zwei nicht
+    // auflösbare IDs nacheinander denselben Platz -1 haben.
+  }, [selectedId, selectedIndex, expanded]);
 
   // Aufgang des Überflugs, der gerade läuft. Das ändert sich nur an Auf- und
   // Untergängen – die Liste rendert deshalb nur dann neu, nicht im Sekundentakt.
@@ -206,9 +221,10 @@ export function TelemetryPanel(): React.JSX.Element | null {
     return () => window.clearInterval(id);
   }, [passes]);
 
-  if (selectedIndex === null) return null;
-  void catalogVersion;
-  const meta = catalogIndex.meta[selectedIndex];
+  if (selectedId === null) return null;
+  // Gewählt, aber nicht im geladenen Katalog: Die Auswahl bleibt stehen und
+  // löst sich auf, sobald das Objekt eintrifft (store.ts, `setCatalog`).
+  const missing = selectedIndex === -1;
 
   // Die Karte wächst vom unteren Rand nach oben. Ohne Grenze schöbe eine
   // lange Überflugliste sie über Kopfzeile und Modus-Leiste; darüber hinaus
@@ -235,11 +251,17 @@ export function TelemetryPanel(): React.JSX.Element | null {
         <Radio size={15} strokeWidth={2.2} className="animate-soft-pulse text-accent" aria-hidden />
         <div className="ml-1 min-w-0 flex-1">
           <div className="truncate text-[15px] font-semibold tracking-[-0.01em] text-label">
-            {meta?.name ?? `Objekt #${selectedIndex}`}
+            {meta?.name ?? `NORAD ${selectedId}`}
           </div>
           <div className="truncate text-[11px] text-label-2">
-            NORAD {meta?.noradId ?? '—'} · {formatNumber(meta?.periodMin ?? 0, 1)} min ·{' '}
-            {formatNumber(meta?.inclinationDeg ?? 0, 1)}° Inkl.
+            {meta ? (
+              <>
+                NORAD {meta.noradId} · {formatNumber(meta.periodMin, 1)} min ·{' '}
+                {formatNumber(meta.inclinationDeg, 1)}° Inkl.
+              </>
+            ) : (
+              <>NORAD {selectedId} · nicht im geladenen Katalog</>
+            )}
           </div>
         </div>
         <button
@@ -247,7 +269,7 @@ export function TelemetryPanel(): React.JSX.Element | null {
           aria-label="Kamera auf Objekt ausrichten"
           className="icon-button"
           onClick={() => {
-            const sample = readSample(selectedIndex);
+            const sample = readSample(selectedIndex ?? -1);
             if (sample) requestFocus(sample.azimuth, sample.elevation);
           }}
         >
@@ -348,7 +370,9 @@ export function TelemetryPanel(): React.JSX.Element | null {
             </div>
 
             {passPending && (
-              <div className="text-[12.5px] text-label-2">Berechne Ephemeriden …</div>
+              <div className="text-[12.5px] text-label-2">
+                {missing ? 'Folgt, sobald das Objekt im Katalog steht.' : 'Berechne Ephemeriden …'}
+              </div>
             )}
 
             {!passPending && passes.length === 0 && (

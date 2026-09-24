@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Search, SlidersHorizontal, X } from 'lucide-react';
 import { RAD, compassLabel } from '../../math/coords';
 import { INVISIBLE_MAGNITUDE, passesSkyFilter } from '../../math/visibility';
-import { engine } from '../../hooks/useSatelliteEngine';
 import { readSample, requestFocus } from '../../state/runtime';
 import type { SatelliteSample } from '../../state/runtime';
 import { useAppStore } from '../../state/store';
@@ -45,7 +44,7 @@ export function SatelliteDrawer(): React.JSX.Element {
   const filters = useAppStore((s) => s.filters);
   const setFilters = useAppStore((s) => s.setFilters);
   const select = useAppStore((s) => s.select);
-  const selectedIndex = useAppStore((s) => s.selectedIndex);
+  const selectedId = useAppStore((s) => s.selectedId);
 
   /*
    * Die Sucheingabe hängt an lokalem State und wird kurz verzögert in den
@@ -168,8 +167,10 @@ export function SatelliteDrawer(): React.JSX.Element {
 
   const pick = useCallback(
     (row: Row) => {
-      select(row.meta.index);
-      engine.requestPass(row.meta.index);
+      // Gewählt wird die Identität; die Überflugliste fordert
+      // useSatelliteEngine an, sobald die Auswahl steht. Der Platz dient nur
+      // noch dem Kameraschwenk auf die aktuelle Position.
+      select(row.meta.noradId);
       const sample = readSample(row.meta.index);
       if (sample) requestFocus(sample.azimuth, sample.elevation);
       setDrawerOpen(false);
@@ -256,7 +257,7 @@ export function SatelliteDrawer(): React.JSX.Element {
                   key={row.meta.noradId}
                   row={row}
                   top={(first + i) * ROW_HEIGHT}
-                  selected={selectedIndex === row.meta.index}
+                  selected={selectedId === row.meta.noradId}
                   onSelect={pick}
                 />
               ))}

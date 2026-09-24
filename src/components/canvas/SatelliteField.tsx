@@ -166,6 +166,9 @@ export function SatelliteField(): React.JSX.Element {
 
   const catalog = useAppStore((s) => s.catalog);
   const mode = useAppStore((s) => s.filters.mode);
+  // Platz, nicht NORAD-ID: Der Store löst die Auswahl einmal je Auswahl und
+  // Katalogfassung auf, hier wird nur noch mit Zahlen indiziert. -1 heißt,
+  // die ID steht gerade nicht im Katalog – dann gibt es keinen Ring.
   const selectedIndex = useAppStore((s) => s.selectedIndex);
 
   const modeRef = useRef(mode);
@@ -358,7 +361,7 @@ export function SatelliteField(): React.JSX.Element {
     const selected = selectedRef.current;
     if (!ring) return;
 
-    if (selected === null || selected >= count || buffers.size.array[selected] <= 0) {
+    if (selected === null || selected < 0 || selected >= count || buffers.size.array[selected] <= 0) {
       ring.visible = false;
       return;
     }

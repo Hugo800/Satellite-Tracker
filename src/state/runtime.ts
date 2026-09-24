@@ -1,5 +1,5 @@
 import { Quaternion, Vector3 } from 'three';
-import type { SatelliteMeta } from '../types';
+import type { NoradId, SatelliteMeta } from '../types';
 import {
   TELEMETRY_STRIDE,
   T_ALT,
@@ -127,14 +127,54 @@ export const catalogIndex: {
    * Objekts in der Telemetriekarte.
    */
   meta: Array<SatelliteMeta | undefined>;
+  /**
+   * Platz je NORAD-ID – die Umkehrung von `meta`.
+   *
+   * Entsteht im selben Durchlauf wie die Flags oben (`rebuildCatalogIndex` in
+   * useSatelliteEngine.ts), also genau dann, wenn auch der Store die neue
+   * Katalogfassung bekommt. Wer die Auswahl in einen Platz übersetzt – Karte,
+   * Ring, Radar, Routing an den Shard –, schlägt hier nach: je Auswahl oder
+   * Katalogwechsel, beim Routing zusätzlich je Anfrage (auch bei der
+   * Bahnspur-Nachführung alle 12 s), aber nie je Bild. Es stehen nur Objekte mit
+   * gültigem Bahnsatz darin, denn nur für sie meldet der Worker Metadaten.
+   *
+   * Anders als die frühere Index-Map (siehe `meta`) trägt sie mehr als eine
+   * Abfrage: Auflösung der Auswahl, Routing, künftig die Merkliste. Die Map in
+   * derselben Schleife mitzubauen kostete im Nachbau mit 12 500 Objekten rund
+   * 0,4 ms je Katalogfassung (Node 22, Desktop, 24.09.2026); Fassungen
+   * entstehen nur beim Laden, gebündelt im Abstand von 220 ms.
+   */
+  slotById: Map<NoradId, number>;
   version: number;
 } = {
   groupIds: new Uint8Array(0),
   starlink: new Uint8Array(0),
   highlight: new Uint8Array(0),
   meta: [],
+  slotById: new Map(),
   version: 0,
 };
+
+/**
+ * Löst eine gewählte ID gegen den aktuellen Katalog auf.
+ *
+ * `selectedIndex` ist `null` ohne Auswahl, -1, solange die ID nicht im Katalog
+ * steht, sonst der Platz. `selectedMeta` sind die Metadaten an diesem Platz –
+ * nur, wenn sie wirklich diese ID tragen; sonst gilt die Auswahl als nicht
+ * aufgelöst, statt ein anderes Objekt zu zeigen. Ersetzt der Worker einen
+ * Eintrag an Ort und Stelle (Offline-Fallback → echte Bahndaten), ist
+ * `selectedMeta` ein neues Objekt bei gleichem Platz.
+ */
+export function resolveSelection(noradId: NoradId | null): {
+  selectedIndex: number | null;
+  selectedMeta: SatelliteMeta | null;
+} {
+  if (noradId === null) return { selectedIndex: null, selectedMeta: null };
+  const slot = catalogIndex.slotById.get(noradId);
+  const meta = slot === undefined ? undefined : catalogIndex.meta[slot];
+  if (slot === undefined || meta?.noradId !== noradId) return { selectedIndex: -1, selectedMeta: null };
+  return { selectedIndex: slot, selectedMeta: meta };
+}
 
 export interface ViewState {
   /** Aktuelle Kamera-Orientierung (wird vom CameraRig jeden Frame gespiegelt). */
@@ -176,9 +216,15 @@ export const orientationState: OrientationState = {
   accuracyDeg: null,
 };
 
-/** Bahnspur des aktuell selektierten Objekts (Einheitsvektoren, xyz-interleaved). */
-export const trailState: { index: number; points: Float32Array | null; version: number } = {
-  index: -1,
+/**
+ * Bahnspur des aktuell selektierten Objekts (Einheitsvektoren, xyz-interleaved).
+ *
+ * `noradId` nennt das Objekt, zu dem `points` gehört. OrbitTrail zeichnet nur,
+ * wenn es die aktuelle Auswahl ist – das ist die Korrelation, die eine
+ * verspätete Antwort für ein vorher gewähltes Objekt vom Bild fernhält.
+ */
+export const trailState: { noradId: NoradId | null; points: Float32Array | null; version: number } = {
+  noradId: null,
   points: null,
   version: 0,
 };

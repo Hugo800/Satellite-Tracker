@@ -20,11 +20,14 @@ const REFRESH_MS = 12_000;
 export function OrbitTrail(): React.JSX.Element | null {
   const lineRef = useRef<Line2>(null);
   const seenVersion = useRef(-1);
-  const selectedIndex = useAppStore((s) => s.selectedIndex);
+  const selectedId = useAppStore((s) => s.selectedId);
+  // Nur als Auslöser: `null`, solange die ID nicht im Katalog steht; ein neues
+  // Objekt bei neuen Bahndaten oder neuem Platz (store.ts).
+  const selectedMeta = useAppStore((s) => s.selectedMeta);
   const showTrails = useAppStore((s) => s.showTrails);
 
-  const selectedRef = useRef(selectedIndex);
-  selectedRef.current = selectedIndex;
+  const selectedRef = useRef(selectedId);
+  selectedRef.current = selectedId;
 
   const { points, colors } = useMemo(() => {
     const pts: Vector3[] = [];
@@ -39,28 +42,39 @@ export function OrbitTrail(): React.JSX.Element | null {
   }, []);
 
   useEffect(() => {
-    if (selectedIndex === null || !showTrails) {
-      trailState.points = null;
-      trailState.version += 1;
-      return;
-    }
-    engine.requestTrail(selectedIndex, -25, 70, SAMPLES);
-    const id = window.setInterval(
-      () => engine.requestTrail(selectedIndex, -25, 70, SAMPLES),
-      REFRESH_MS,
-    );
+    // Die Spur des vorigen Objekts sofort verwerfen, nicht erst, wenn die neue
+    // eintrifft – bis dahin stünde sie sonst unter dem neuen Ring.
+    trailState.noradId = null;
+    trailState.points = null;
+    trailState.version += 1;
+    // Angefragt wird erst, wenn die ID einen Platz hat: Ohne ihn weiß der
+    // Main-Thread nicht, welcher Shard rechnet. Löst sie sich später auf (neue
+    // Gruppe, neu aufgebauter Pool) oder kommen neue Bahndaten, läuft der
+    // Effekt erneut.
+    if (selectedMeta === null || !showTrails) return;
+    const noradId = selectedMeta.noradId;
+    engine.requestTrail(noradId, -25, 70, SAMPLES);
+    const id = window.setInterval(() => engine.requestTrail(noradId, -25, 70, SAMPLES), REFRESH_MS);
     return () => window.clearInterval(id);
-  }, [selectedIndex, showTrails]);
+  }, [selectedId, selectedMeta, showTrails]);
 
   useFrame(() => {
     const line = lineRef.current;
-    if (!line || trailState.version === seenVersion.current) return;
+    if (!line) return;
+    // Bezugsprüfung in jedem Bild – ein einziger Vergleich, nicht einer je
+    // Objekt: Gezeichnet wird nur eine Spur, die zur aktuellen Auswahl gehört.
+    // Das greift auch in dem Moment, in dem die Auswahl schon gewechselt hat,
+    // der Effekt oben die alte Spur aber noch nicht verworfen hat.
+    if (trailState.noradId !== selectedRef.current) {
+      line.visible = false;
+      seenVersion.current = -1;
+      return;
+    }
+    if (trailState.version === seenVersion.current) return;
     seenVersion.current = trailState.version;
 
     const source = trailState.points;
-    // Eine verzögerte Antwort kann noch zum vorher gewählten Objekt gehören –
-    // sie darf nicht als Bahn des aktuellen Satelliten gezeichnet werden.
-    if (!source || source.length !== SAMPLES * 3 || trailState.index !== selectedRef.current) {
+    if (!source || source.length !== SAMPLES * 3) {
       line.visible = false;
       return;
     }
@@ -72,7 +86,7 @@ export function OrbitTrail(): React.JSX.Element | null {
     line.visible = true;
   });
 
-  if (selectedIndex === null || !showTrails) return null;
+  if (selectedId === null || !showTrails) return null;
 
   return (
     <Line

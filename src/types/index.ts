@@ -58,12 +58,33 @@ export interface Ephemeris extends LookAngles {
  */
 export type SatelliteGroup = 'stations' | 'brightest' | 'weather' | 'starlink' | 'other';
 
+/**
+ * NORAD-Katalognummer in der einen Schreibweise, in der sie als Identität gilt:
+ * Dezimalzahl ohne führende Nullen, Alpha-5 aufgelöst (`A0001` → `100001`).
+ *
+ * Die Marke lässt nur Kennungen durch, die `normalizeNoradId` erzeugt hat
+ * (src/data/tleSources.ts). Ein roher TLE-Feldinhalt kann so nicht als
+ * Worker-Anfrage verschickt werden – der Compiler meldet die Stelle, statt
+ * dass das Objekt still unauffindbar bleibt. Für die Auswahl gilt das NICHT:
+ * `select` im Store nimmt `string | null` und normalisiert selbst, dort
+ * kompiliert auch ein roher Wert.
+ */
+export type NoradId = string & { readonly __brand: 'NoradId' };
+
 /** Statische Katalogdaten eines Satelliten (React-State-tauglich, ändert sich selten). */
 export interface SatelliteMeta {
-  /** Stabiler Index in den Telemetrie-Buffern. */
+  /**
+   * Platz in den Telemetrie-Buffern und in `catalogIndex` – keine Identität.
+   *
+   * Innerhalb eines Worker-Pools bleibt er fest (`knownIds` im Worker), ein
+   * neu aufgebauter Pool vergibt die Plätze aber nach Ladereihenfolge und
+   * -erfolg neu: Fehlt beim einen Mal Starlink, rückt der Gesamtkatalog nach
+   * vorn (scripts/verify-selection.ts, Abschnitt F). Auswahl, Bahnspur und
+   * Überflüge hängen deshalb an `noradId`.
+   */
   index: number;
   name: string;
-  noradId: string;
+  noradId: NoradId;
   group: SatelliteGroup;
   /** Prominentes Objekt (ISS, Hubble, Tiangong …) – bekommt ein eigenes Mesh + Label. */
   highlight: boolean;
@@ -175,12 +196,19 @@ export type WorkerRequest =
   | { type: 'stop' }
   | { type: 'time'; base: TimeBase }
   | { type: 'recycle'; buffer: ArrayBuffer }
-  /** Ausgewähltes Objekt – nur dafür werden Subpunkt und Bahnhöhe gerechnet. */
-  | { type: 'select'; index: number | null }
+  /**
+   * Ausgewähltes Objekt – nur dafür werden Subpunkt und Bahnhöhe gerechnet.
+   *
+   * Auswahl, Bahnspur und Überflug tragen die NORAD-ID, nicht den Platz: Den
+   * übersetzt jeder Shard selbst über `knownIds`. Das Feld heißt bewusst
+   * anders als früher (`index`), damit keine Stelle mit einer Zahl
+   * weiterkompiliert.
+   */
+  | { type: 'select'; noradId: NoradId | null }
   /** Rohtext einer Gruppe, vom Lader-Shard über den Main-Thread verteilt. */
   | { type: 'tle'; group: SatelliteGroup; text: string }
-  | { type: 'trail'; index: number; fromMin: number; toMin: number; samples: number }
-  | { type: 'pass'; index: number; searchHours: number };
+  | { type: 'trail'; noradId: NoradId; fromMin: number; toMin: number; samples: number }
+  | { type: 'pass'; noradId: NoradId; searchHours: number };
 
 export type WorkerResponse =
   /** Metadaten des eigenen Shards; `total` ist die Größe des Gesamtkatalogs. */
@@ -196,8 +224,9 @@ export type WorkerResponse =
       durationMs: number;
       buffer: ArrayBuffer;
     }
-  | { type: 'trail'; index: number; points: Float32Array }
-  | { type: 'pass'; index: number; passes: PassPrediction[] }
+  /** Antworten nennen die ID, für die sie gerechnet wurden – Grundlage der Stale-Guards. */
+  | { type: 'trail'; noradId: NoradId; points: Float32Array }
+  | { type: 'pass'; noradId: NoradId; passes: PassPrediction[] }
   /** Rohtext, den der Lader-Shard an seine Geschwister weiterreichen lässt. */
   | { type: 'tle'; group: SatelliteGroup; text: string }
   | { type: 'status'; message: string; loading: boolean }
