@@ -13,6 +13,7 @@ import type {
   SkyFilterMode,
   SunState,
   ThemePreference,
+  TimeBase,
 } from '../types';
 
 export interface AppState {
@@ -62,7 +63,25 @@ export interface AppState {
   passes: PassPrediction[];
   /** Objekt, zu dem `passes` gehört – verhindert, dass eine verzögerte Antwort die neue Auswahl überschreibt. */
   passId: NoradId | null;
+  /**
+   * Virtuelle Zeit, ab der `passes` gesucht wurde, oder `null` ohne Liste.
+   * useSatelliteEngine fordert neu an, sobald die virtuelle Zeit davor liegt
+   * (Rückwärtslauf) oder mehr als 24 h dahinter (Zeitraffer).
+   */
+  passFromMs: number | null;
   passPending: boolean;
+
+  /**
+   * Zeitbasis der ganzen Szene. Einziger Schreiber ist `engine`
+   * (useSatelliteEngine.ts), der sie zugleich an alle Shards schickt.
+   *
+   * Sie wechselt nur bei `setTimeScale`, `jumpTo` und `resetToRealTime` –
+   * nie im Takt der Uhr. Komponenten, die `timeBase`, `selectTimeScale`,
+   * `selectTimeEpoch` oder `selectRealtime` abonnieren, rendern also nur bei
+   * diesen Aufrufen neu. Die laufende virtuelle Zeit liefert `virtualNow()`,
+   * gedacht für rAF-Schleifen, Intervalle und `useFrame`.
+   */
+  timeBase: TimeBase;
 
   filters: CatalogFilters;
   drawerOpen: boolean;
@@ -82,7 +101,8 @@ export interface AppState {
   pushError: (message: string) => void;
   /** Nimmt jede Schreibweise einer NORAD-ID an (`A0001`, `00005`) und normalisiert sie. */
   select: (noradId: string | null) => void;
-  setPasses: (noradId: NoradId, passes: PassPrediction[]) => void;
+  /** `epoch` und `fromMs` stammen aus der Antwort des Shards – Grundlage des Zeit-Stale-Guards. */
+  setPasses: (noradId: NoradId, passes: PassPrediction[], epoch: number, fromMs: number) => void;
   setPassPending: (pending: boolean) => void;
   setFilters: (patch: Partial<CatalogFilters>) => void;
   setMode: (mode: SkyFilterMode) => void;
@@ -96,6 +116,37 @@ export interface AppState {
   setTheme: (theme: ThemePreference) => void;
   setSun: (sun: SunState) => void;
   setMoon: (moon: MoonState) => void;
+  /** Nur für `engine` – er schickt dieselbe Basis an die Shards. */
+  setTimeBase: (timeBase: TimeBase) => void;
+}
+
+/** Virtuelle Zeit zur Wanduhrzeit `realMs` unter der Basis `base`. */
+export function virtualTimeAt(base: TimeBase, realMs: number): number {
+  return base.originVirtualMs + (realMs - base.originRealMs) * base.scale;
+}
+
+/** Echtzeit heißt: gleiche Geschwindigkeit UND kein Versatz zur Wanduhr. */
+export function isRealtime(base: TimeBase): boolean {
+  return base.scale === 1 && base.originVirtualMs === base.originRealMs;
+}
+
+/**
+ * Laufende virtuelle Zeit. Liest die Basis aus dem Store, abonniert nichts
+ * und löst deshalb kein Rendern aus – für rAF, Intervalle und `useFrame`.
+ */
+export function virtualNow(realMs: number = Date.now()): number {
+  return virtualTimeAt(useAppStore.getState().timeBase, realMs);
+}
+
+/** Selektoren: Rendern nur, wenn sich der jeweilige Wert ändert. */
+export const selectTimeScale = (state: AppState): number => state.timeBase.scale;
+export const selectTimeEpoch = (state: AppState): number => state.timeBase.epoch;
+export const selectRealtime = (state: AppState): boolean => isRealtime(state.timeBase);
+
+/** Ein einziger Aufruf der Uhr – zwei könnten um eine Millisekunde auseinanderliegen und `isRealtime` verfehlen. */
+function wallClockBase(): TimeBase {
+  const now = Date.now();
+  return { originRealMs: now, originVirtualMs: now, scale: 1, epoch: 0 };
 }
 
 const DEFAULT_FILTERS: CatalogFilters = {
@@ -133,7 +184,9 @@ export const useAppStore = create<AppState>((set) => ({
   selectedMeta: null,
   passes: [],
   passId: null,
+  passFromMs: null,
   passPending: false,
+  timeBase: wallClockBase(),
 
   filters: DEFAULT_FILTERS,
   drawerOpen: false,
@@ -183,16 +236,20 @@ export const useAppStore = create<AppState>((set) => ({
         ...resolveSelection(selectedId),
         passes: [],
         passId: null,
+        passFromMs: null,
         passPending: selectedId !== null,
       };
     }),
-  // Stale-Guard: Eine Antwort des Pools gilt nur, wenn ihr Objekt noch gewählt
-  // ist. Wechselt die Auswahl, während der Shard rechnet, landet sonst die
-  // Liste des vorigen Objekts unter dem neuen Namen.
-  setPasses: (noradId, passes) =>
+  // Stale-Guards: Eine Antwort des Pools gilt nur, wenn ihr Objekt noch gewählt
+  // ist UND sie mit der aktuellen Zeitepoche gerechnet wurde. Wechselt die
+  // Auswahl, während der Shard rechnet, landete sonst die Liste des vorigen
+  // Objekts unter dem neuen Namen; springt die Zeit, die Liste der alten Zeit
+  // unter der neuen. Beide Prüfungen sind unabhängig: Die ID sagt nichts über
+  // die Zeit, die Epoche nichts über das Objekt.
+  setPasses: (noradId, passes, epoch, fromMs) =>
     set((state) =>
-      state.selectedId === noradId
-        ? { passes, passId: noradId, passPending: false }
+      state.selectedId === noradId && state.timeBase.epoch === epoch
+        ? { passes, passId: noradId, passFromMs: fromMs, passPending: false }
         : state,
     ),
   setPassPending: (passPending) => set({ passPending }),
@@ -220,4 +277,24 @@ export const useAppStore = create<AppState>((set) => ({
   },
   setSun: (sun) => set({ sun }),
   setMoon: (moon) => set({ moon }),
+  // Ein Sprung macht die Überflugliste im selben Schritt ungültig: Sie wurde
+  // ab einer virtuellen Zeit gesucht, die nicht mehr gilt. Nach einem Sprung
+  // zurück stünden sonst bis zur neuen Antwort Überflüge als „nächste“ da,
+  // die für die neue Zeit Stunden oder Tage in der Zukunft liegen, und die
+  // dazwischen fehlten. Neu angefordert wird im Hook, der dafür an der
+  // Epoche hängt (useSatelliteEngine.ts). Eine reine Geschwindigkeits-
+  // änderung lässt die Liste stehen – sie nennt absolute Zeiten und bleibt
+  // gültig.
+  setTimeBase: (timeBase) =>
+    set((state) =>
+      timeBase.epoch === state.timeBase.epoch
+        ? { timeBase }
+        : {
+            timeBase,
+            passes: [],
+            passId: null,
+            passFromMs: null,
+            passPending: state.selectedId !== null,
+          },
+    ),
 }));

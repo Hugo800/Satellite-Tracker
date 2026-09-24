@@ -181,11 +181,34 @@ export type ThemePreference = 'system' | 'light' | 'dark';
  *
  * Damit berechnen alle Worker des Pools garantiert dieselbe Epoche – ohne
  * inkrementelle Akkumulation, die zwischen den Threads auseinanderliefe.
+ *
+ * Geschrieben wird sie nur von `engine` (src/hooks/useSatelliteEngine.ts), der
+ * sie im Store ablegt und an alle Shards schickt.
  */
 export interface TimeBase {
   originRealMs: number;
   originVirtualMs: number;
+  /** Zeitraffer: 1 = Echtzeit, 60 = eine Minute je Sekunde, negativ = rückwärts, 0 = Pause. */
   scale: number;
+  /**
+   * Zählt die Sprünge der virtuellen Zeit: `engine.jumpTo` und die Rückkehr
+   * zur Echtzeit aus einem abweichenden Stand.
+   *
+   * Der Rundruf erreicht die Shards nicht im selben Moment; ein Shard kann
+   * noch einen Tick mit der alten Basis rechnen, während ein anderer schon die
+   * neue nutzt. Ticks, Bahnspuren und Überflüge tragen deshalb die Epoche, mit
+   * der sie gerechnet wurden, und der Main-Thread verwirft alles aus einer
+   * anderen (scripts/verify-timetravel.ts, Abschnitte B, G und H).
+   *
+   * Eine reine Geschwindigkeitsänderung (`setTimeScale`, auch mit Umkehr der
+   * Richtung) lässt die Epoche stehen: Die neue Basis ist so gewählt, dass die
+   * virtuelle Zeit im Moment des Wechsels stetig bleibt. Ein Tick, der noch
+   * mit der alten Geschwindigkeit rechnet, liegt deshalb nur um die Laufzeit
+   * der Nachricht mal die Differenz der Geschwindigkeiten daneben – er muss
+   * nicht verworfen werden, und ein Regler, der viele Änderungen schickt,
+   * hält die Telemetrie nicht an.
+   */
+  epoch: number;
 }
 
 export type WorkerRequest =
@@ -219,14 +242,34 @@ export type WorkerResponse =
       shardIndex: number;
       offset: number;
       count: number;
+      /** Virtuelle Zeit, zu der propagiert wurde. */
       time: number;
+      /** `TimeBase.epoch`, mit der `time` entstand. */
+      epoch: number;
       /** Gemessene Rechenzeit des Ticks in ms – speist die adaptive Taktung. */
       durationMs: number;
       buffer: ArrayBuffer;
     }
-  /** Antworten nennen die ID, für die sie gerechnet wurden – Grundlage der Stale-Guards. */
-  | { type: 'trail'; noradId: NoradId; points: Float32Array }
-  | { type: 'pass'; noradId: NoradId; passes: PassPrediction[] }
+  /**
+   * Antworten nennen die ID, für die sie gerechnet wurden, und die Epoche der
+   * Zeitbasis – Grundlage der Stale-Guards für Auswahl und Zeit.
+   */
+  | {
+      type: 'trail';
+      noradId: NoradId;
+      points: Float32Array;
+      /** Virtuelle Zeit, auf die sich `fromMin`/`toMin` der Anfrage beziehen. */
+      timeMs: number;
+      epoch: number;
+    }
+  | {
+      type: 'pass';
+      noradId: NoradId;
+      passes: PassPrediction[];
+      /** Virtuelle Zeit, ab der gesucht wurde. */
+      fromMs: number;
+      epoch: number;
+    }
   /** Rohtext, den der Lader-Shard an seine Geschwister weiterreichen lässt. */
   | { type: 'tle'; group: SatelliteGroup; text: string }
   | { type: 'status'; message: string; loading: boolean }

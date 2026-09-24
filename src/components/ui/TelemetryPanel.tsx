@@ -2,14 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Crosshair, Eye, EyeOff, Radio, Timer, X } from 'lucide-react';
 import { RAD, compassLabel } from '../../math/coords';
 import { readSample, requestFocus } from '../../state/runtime';
-import { useAppStore } from '../../state/store';
+import { selectTimeScale, useAppStore, virtualNow } from '../../state/store';
 import {
   formatClockShort,
-  formatCountdown,
   formatDay,
   formatDurationSec,
   formatNumber,
-  formatRemaining,
+  passCountdown,
 } from '../../utils/format';
 import type { PassPrediction } from '../../types';
 
@@ -196,30 +195,22 @@ export function TelemetryPanel(): React.JSX.Element | null {
   // Aufgang des Überflugs, der gerade läuft. Das ändert sich nur an Auf- und
   // Untergängen – die Liste rendert deshalb nur dann neu, nicht im Sekundentakt.
   const [runningAos, setRunningAos] = useState<number | null>(null);
+  // Countdown und „läuft“ gelten für die Zeit, in der die Szene steht – die
+  // virtuelle, nicht die Wanduhr. Im Zeitraffer vergeht zwischen zwei
+  // Sekundenschritten ein Vielfaches davon (bei ×60 eine Minute); dann
+  // viermal je Sekunde schreiben.
+  const timeScale = useAppStore(selectTimeScale);
   useEffect(() => {
     if (passes.length === 0) return;
     const write = () => {
-      const now = Date.now();
-      // Der erste Eintrag, der noch nicht vorbei ist: Bleibt die Karte über
-      // einen Untergang hinaus offen, rückt der Countdown zum nächsten weiter.
-      const current = passes.find((p) => p.los > now);
-      const running = current !== undefined && current.aos <= now;
-      setRunningAos(running ? current.aos : null);
-      if (!countdownRef.current) return;
-      if (!current) {
-        countdownRef.current.textContent = '–';
-      } else if (running) {
-        countdownRef.current.textContent = `läuft · ${
-          current.losOpen ? 'Ende offen' : formatRemaining(current.los, now)
-        }`;
-      } else {
-        countdownRef.current.textContent = formatCountdown(current.sunlitStart ?? current.aos, now);
-      }
+      const { runningAos: aos, text } = passCountdown(passes, virtualNow());
+      setRunningAos(aos);
+      if (countdownRef.current) countdownRef.current.textContent = text;
     };
     write();
-    const id = window.setInterval(write, 1000);
+    const id = window.setInterval(write, Math.abs(timeScale) > 1 ? 250 : 1000);
     return () => window.clearInterval(id);
-  }, [passes]);
+  }, [passes, timeScale]);
 
   if (selectedId === null) return null;
   // Gewählt, aber nicht im geladenen Katalog: Die Auswahl bleibt stehen und

@@ -120,6 +120,8 @@ interface InstanceBuffers {
   cur: InstancedBufferAttribute;
   color: InstancedBufferAttribute;
   size: InstancedBufferAttribute;
+  /** Nur auf der CPU: 1, wenn der Platz im zuletzt übernommenen Stand gültig war (`range` endlich). */
+  valid: Uint8Array;
 }
 
 function createBuffers(capacity: number, quad: PlaneGeometry): InstanceBuffers {
@@ -143,7 +145,7 @@ function createBuffers(capacity: number, quad: PlaneGeometry): InstanceBuffers {
   // Gesamtgeometrie brächte nichts und würde bei leerer Bounding-Box schaden.
   geometry.boundingSphere = null;
 
-  return { capacity, geometry, prev, cur, color, size };
+  return { capacity, geometry, prev, cur, color, size, valid: new Uint8Array(capacity) };
 }
 
 /**
@@ -235,7 +237,7 @@ export function SatelliteField(): React.JSX.Element {
     [dotTexture, iconTexture, selectionTexture, quad, material],
   );
 
-  const frameState = useRef({ revision: -1, elapsed: 0, visible: 0, mode: '' });
+  const frameState = useRef({ revision: -1, elapsed: 0, visible: 0, mode: '', epoch: -1 });
 
   // Der Ring richtet sich erst beim Zeichnen nach der Kamera aus. Im Frame-Takt
   // (Priorität 0) läuft er vor dem CameraRig und sähe nach dem Verlassen von AR
@@ -270,7 +272,10 @@ export function SatelliteField(): React.JSX.Element {
     const activeMode = modeRef.current;
 
     if (state.revision !== telemetry.revision || state.mode !== activeMode) {
-      const first = state.revision === -1;
+      // Nach einem Zeitsprung (neue `telemetry.epoch`) wie beim ersten Tick:
+      // Vorgänger = Ziel. Sonst glitte jedes Objekt ein Tickintervall lang von
+      // seinem Ort in der alten Zeit quer über den Himmel zum neuen.
+      const first = state.revision === -1 || state.epoch !== telemetry.epoch;
       const data = telemetry.data;
       const prev = buffers.prev.array as Float32Array;
       const cur = buffers.cur.array as Float32Array;
@@ -299,8 +304,18 @@ export function SatelliteField(): React.JSX.Element {
         // gerade ausgeblendete. Sonst stünde in `cur` beim Wiederauftauchen
         // über dem Horizont ein beliebig alter Wert, und die Instanz zöge einen
         // Frame lang quer über den Himmel.
+        //
+        // Ein Platz, der im vorigen Stand ungültig war (`range` NaN), hat
+        // dagegen keinen Ort, von dem aus interpoliert werden dürfte: Der
+        // Wachhund blendet einen hängenden Shard nach einem Zeitsprung mit
+        // Höhe −90° und dem Azimut der alten Zeit aus (useSatelliteEngine.ts,
+        // `invalidateShard`), neue Plätze stehen bis zu ihrem ersten Tick
+        // ebenfalls ungültig auf −90° (runtime.ts, `ensureTelemetryCapacity`).
+        // Liefert der Shard wieder, flöge das Objekt sonst ein Tickintervall
+        // lang aus der Tiefe herauf (scripts/verify-timetravel.ts, Abschnitt C).
         const azimuth = data[base + T_AZ];
-        if (first) {
+        const valid = Number.isFinite(data[base + T_RANGE]);
+        if (first || buffers.valid[i] === 0) {
           prev[i * 2] = azimuth;
           prev[i * 2 + 1] = elevation;
         } else {
@@ -309,10 +324,10 @@ export function SatelliteField(): React.JSX.Element {
         }
         cur[i * 2] = azimuth;
         cur[i * 2 + 1] = elevation;
+        buffers.valid[i] = valid ? 1 : 0;
 
         const show =
-          Number.isFinite(data[base + T_RANGE]) &&
-          passesSkyFilter(activeMode, starlinkFlags[i] === 1, elevation, eclipsed, magnitude);
+          valid && passesSkyFilter(activeMode, starlinkFlags[i] === 1, elevation, eclipsed, magnitude);
 
         if (!show) {
           sizes[i] = 0;
@@ -342,6 +357,7 @@ export function SatelliteField(): React.JSX.Element {
       buffers.size.needsUpdate = true;
 
       state.revision = telemetry.revision;
+      state.epoch = telemetry.epoch;
       state.mode = activeMode;
       state.visible = visible;
       state.elapsed = 0;

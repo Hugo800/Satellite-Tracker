@@ -118,7 +118,9 @@ let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let baseIntervalMs = 100;
 let running = false;
 
-let timeBase: TimeBase = { originRealMs: Date.now(), originVirtualMs: Date.now(), scale: 1 };
+/** Bis zur ersten `time`-Nachricht, die der Pool gleich nach `init` schickt: Echtzeit. */
+const startedAtMs = Date.now();
+let timeBase: TimeBase = { originRealMs: startedAtMs, originVirtualMs: startedAtMs, scale: 1, epoch: 0 };
 
 /** Freigegebene Buffer des Main-Threads – vermeidet eine Allokation je Tick. */
 const bufferPool: ArrayBuffer[] = [];
@@ -429,6 +431,9 @@ function tick(): number {
 
   const startedAt = performance.now();
   const timeMs = virtualNow();
+  // Epoche zusammen mit der Zeit festhalten: Der Main-Thread erkennt daran
+  // einen Tick, der noch mit der Basis vor einem Sprung gerechnet wurde.
+  const epoch = timeBase.epoch;
   const date = new Date(timeMs);
   const tickFrame = buildTickFrame(date, observer as ObserverGd);
 
@@ -474,6 +479,7 @@ function tick(): number {
       offset: shardIndex,
       count,
       time: timeMs,
+      epoch,
       durationMs,
       buffer: buffer.buffer as ArrayBuffer,
     },
@@ -535,6 +541,7 @@ function buildTrail(noradId: NoradId, fromMin: number, toMin: number, samples: n
   const points = new Float32Array(samples * 3);
   const spanMs = (toMin - fromMin) * 60_000;
   const timeMs = virtualNow();
+  const epoch = timeBase.epoch;
   const sunUnit = sunEciUnitVector(new Date(timeMs));
 
   for (let i = 0; i < samples; i += 1) {
@@ -548,7 +555,7 @@ function buildTrail(noradId: NoradId, fromMin: number, toMin: number, samples: n
     points[i * 3 + 2] = -cosEl * Math.cos(az);
   }
 
-  post({ type: 'trail', noradId, points }, [points.buffer]);
+  post({ type: 'trail', noradId, points, timeMs, epoch }, [points.buffer]);
 }
 
 /* ------------------------------------------------------------------ */
@@ -600,6 +607,8 @@ ctx.onmessage = (event: MessageEvent<WorkerRequest>) => {
       break;
 
     case 'time':
+      // Gilt ab dem nächsten Tick. Die Nachricht wartet, bis ein laufender
+      // Tick fertig ist; dieser und jeder davor meldet noch die alte Epoche.
       timeBase = msg.base;
       break;
 
@@ -621,18 +630,20 @@ ctx.onmessage = (event: MessageEvent<WorkerRequest>) => {
       const slot = ownSlotOf(msg.noradId);
       if (slot < 0) break;
       const entry = own[slot];
+      const fromMs = virtualNow();
+      const { epoch } = timeBase;
       if (!entry || !observer) {
-        post({ type: 'pass', noradId: msg.noradId, passes: [] });
+        post({ type: 'pass', noradId: msg.noradId, passes: [], fromMs, epoch });
         break;
       }
       const passes = predictPasses(entry.satrec, observer, {
-        fromMs: virtualNow(),
+        fromMs,
         searchHours: msg.searchHours,
         stepSec: 30,
         minElevationDeg: 1,
         standardMagnitude: entry.meta.standardMagnitude,
       });
-      post({ type: 'pass', noradId: msg.noradId, passes });
+      post({ type: 'pass', noradId: msg.noradId, passes, fromMs, epoch });
       break;
     }
   }

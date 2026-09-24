@@ -1,17 +1,27 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Line } from '@react-three/drei';
 import type { Line2 } from 'three-stdlib';
 import { Color, Vector3 } from 'three';
 import { engine } from '../../hooks/useSatelliteEngine';
 import { trailState } from '../../state/runtime';
-import { useAppStore } from '../../state/store';
+import { selectTimeEpoch, useAppStore, virtualNow } from '../../state/store';
 import { SKY_RADIUS } from '../../data/groups';
 
 const SAMPLES = 220;
 const TRAIL_RADIUS = SKY_RADIUS * 0.99;
-/** Bahnspur regelmäßig nachführen, damit sie nicht hinter dem Objekt zurückbleibt. */
+/**
+ * Bahnspur nach so viel *virtueller* Zeit nachführen, damit sie nicht hinter
+ * dem Objekt zurückbleibt. Nach der Wanduhr gemessen, liefe das Objekt im
+ * Zeitraffer davon: Die Spur reicht 70 min voraus, bei ×600 sind das 7 s.
+ */
 const REFRESH_MS = 12_000;
+/**
+ * So oft wird geprüft, ob `REFRESH_MS` verstrichen ist. Ab ×48 vergehen 12 s
+ * virtuelle Zeit schon in einem Prüfabstand; dann wird bei jeder Prüfung
+ * nachgeführt, bei ×600 also alle 150 s virtueller Zeit.
+ */
+const REFRESH_CHECK_MS = 250;
 
 /**
  * Bahnspur des selektierten Satelliten als Line2 (screen-space Linienbreite).
@@ -25,6 +35,10 @@ export function OrbitTrail(): React.JSX.Element | null {
   // Objekt bei neuen Bahndaten oder neuem Platz (store.ts).
   const selectedMeta = useAppStore((s) => s.selectedMeta);
   const showTrails = useAppStore((s) => s.showTrails);
+  // Nur als Auslöser: Nach einem Zeitsprung hat der Pool die Spur der alten
+  // Zeit schon verworfen (useSatelliteEngine.ts, `applyTimeBase`); ohne neue
+  // Anfrage bliebe sie bis zur nächsten Nachführung leer.
+  const timeEpoch = useAppStore(selectTimeEpoch);
 
   const selectedRef = useRef(selectedId);
   selectedRef.current = selectedId;
@@ -50,28 +64,29 @@ export function OrbitTrail(): React.JSX.Element | null {
     // Angefragt wird erst, wenn die ID einen Platz hat: Ohne ihn weiß der
     // Main-Thread nicht, welcher Shard rechnet. Löst sie sich später auf (neue
     // Gruppe, neu aufgebauter Pool) oder kommen neue Bahndaten, läuft der
-    // Effekt erneut.
+    // Effekt erneut – ebenso nach einem Zeitsprung (`timeEpoch`).
     if (selectedMeta === null || !showTrails) return;
     const noradId = selectedMeta.noradId;
     engine.requestTrail(noradId, -25, 70, SAMPLES);
-    const id = window.setInterval(() => engine.requestTrail(noradId, -25, 70, SAMPLES), REFRESH_MS);
+    // Betrag: Auch rückwärts entfernt sich das Objekt von der Spur.
+    let requestedAt = virtualNow();
+    const id = window.setInterval(() => {
+      if (Math.abs(virtualNow() - requestedAt) < REFRESH_MS) return;
+      requestedAt = virtualNow();
+      engine.requestTrail(noradId, -25, 70, SAMPLES);
+    }, REFRESH_CHECK_MS);
     return () => window.clearInterval(id);
-  }, [selectedId, selectedMeta, showTrails]);
+  }, [selectedId, selectedMeta, showTrails, timeEpoch]);
 
-  useLayoutEffect(() => {
-    // Anfangssichtbarkeit *nicht* als `visible`-Prop an <Line> geben (siehe
-    // JSX unten): drei verteilt alle Zusatz-Props über `...rest` sowohl an
-    // das Line2-Objekt als auch an das LineMaterial (node_modules/@react-three/
-    // drei/core/Line.js, zwei `_extends({...}, rest)`-Aufrufe). `visible={false}`
-    // als Prop setzt damit `material.visible` dauerhaft auf false – das später
-    // in useFrame gesetzte `line.visible = true` erzeugt dann nie einen
-    // Draw-Call (gl.info.render.calls bleibt gleich, mit und ohne Linie).
-    // Deshalb hier direkt am Objekt verstecken, bevor der erste Frame steht;
-    // das Material bleibt dabei auf seinem Default (sichtbar).
-    const line = lineRef.current;
-    if (line) line.visible = false;
-  }, []);
-
+  // Die Sichtbarkeit steuert allein diese Bildfunktion; R3F ruft sie in jedem
+  // Bild vor `gl.render`. Ihr erster Aufruf nach dem Einhängen der Linie setzt
+  // `visible` in jedem Fall: aus bei fremder oder fehlender Spur, sonst mit
+  // den Punkten der Spur an. Dass `seenVersion` dann schon der Version
+  // entspräche, ist ausgeschlossen: Anfangs steht sie auf −1, und ausgehängt
+  // wird die Linie nur beim Abwählen oder Ausschalten, wobei der Effekt oben
+  // die Version weiterzählt. Die Platzhalterpunkte mit dem Anfangswert
+  // `visible = true` werden so nie gezeichnet (scripts/verify-wiring.ts,
+  // Abschnitt C).
   useFrame(() => {
     const line = lineRef.current;
     if (!line) return;
@@ -102,6 +117,12 @@ export function OrbitTrail(): React.JSX.Element | null {
 
   if (selectedId === null || !showTrails) return null;
 
+  // Kein `visible`-Prop: drei verteilt alle Zusatz-Props über `...rest` sowohl
+  // an das Line2-Objekt als auch an das LineMaterial (node_modules/
+  // @react-three/drei/core/Line.js, zwei `_extends({...}, rest)`-Aufrufe).
+  // `visible={false}` setzte damit `material.visible` dauerhaft auf false –
+  // das in useFrame gesetzte `line.visible = true` erzeugte dann nie einen
+  // Draw-Call (gl.info.render.calls blieb gleich, mit und ohne Linie).
   return (
     <Line
       ref={lineRef}

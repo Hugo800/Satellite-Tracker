@@ -10,7 +10,18 @@ import { GROUP_COLORS, GROUP_ORDER, SKY_RADIUS } from '../../data/groups';
 
 /** Anzahl gespeicherter Stützstellen je Satellit. */
 const HISTORY_LEN = 20;
-/** Abstand der Stützstellen – maximal 20 × 900 ms = 18 s zurückliegende Bahn. */
+/**
+ * Abstand der Stützstellen in *virtueller* Zeit – in Echtzeit maximal
+ * 20 × 900 ms = 18 s zurückliegende Bahn.
+ *
+ * Im Zeitraffer ab ×9 liegt schon zwischen zwei Ticks im Zieltakt (100 ms)
+ * mindestens dieser Abstand – bei ×9 genau er, darüber mehr –, und jeder
+ * solche Tick wird Stützstelle. Das ist gewollt: Die Spur zeigt dann die Bahn
+ * der letzten 20 Ticks, begrenzt durch `MAX_TRAIL_ARC`. In Echtzeit
+ * abgetastet, lägen bei ×600 zwischen zwei Stützstellen 9 min Bahn – für ein
+ * LEO-Objekt der größte Teil eines Überflugs, ein einziges Segment weit über
+ * `MAX_TRAIL_ARC`.
+ */
 const SAMPLE_INTERVAL_MS = 900;
 /** Kapazität wächst blockweise mit dem Katalog – es gibt keine feste Obergrenze. */
 const CAPACITY_CHUNK = 2048;
@@ -103,13 +114,23 @@ export function SatelliteTrails(): React.JSX.Element | null {
   const buffers = useMemo(() => createBuffers(capacity), [capacity]);
   const palette = useMemo(() => GROUP_ORDER.map((g) => new Color(GROUP_COLORS[g])), []);
 
-  const history = useRef({ writeIndex: 0, filled: 0, lastSampleMs: 0, revision: -1 });
+  const history = useRef({
+    writeIndex: 0,
+    filled: 0,
+    lastSampleMs: 0,
+    revision: -1,
+    /** `telemetry.epoch` der Stützstellen im Ringpuffer. */
+    epoch: -1,
+    /** Vorzeichen des letzten Abtastschritts: 1 vorwärts, −1 rückwärts, 0 noch unbekannt. */
+    direction: 0,
+  });
 
   // Neue Buffer starten leer; erst nach zwei Abtastungen entsteht wieder ein Segment.
   useEffect(() => {
     history.current.filled = 0;
     history.current.writeIndex = 0;
     history.current.revision = -1;
+    history.current.direction = 0;
   }, [buffers]);
 
   const { geometry, attributes } = useMemo(() => {
@@ -145,7 +166,30 @@ export function SatelliteTrails(): React.JSX.Element | null {
     const now = telemetry.timeMs;
     const maxVertices = buffers.alphas.length;
 
-    if (now - state.lastSampleMs >= SAMPLE_INTERVAL_MS) {
+    // Zeitsprung: Die Stützstellen stammen aus der alten Zeit. Verbunden mit
+    // der neuen Position ergäben sie Segmente quer über den Himmel, und nach
+    // einem Sprung zurück läge `now` vor der letzten Stützstelle.
+    if (state.epoch !== telemetry.epoch) {
+      state.epoch = telemetry.epoch;
+      state.filled = 0;
+      state.writeIndex = 0;
+      state.direction = 0;
+    }
+
+    // Betrag statt Differenz: Im Rückwärtslauf wird `now` kleiner, und
+    // `now - lastSampleMs` bliebe für immer negativ – die Spuren stünden.
+    const step = now - state.lastSampleMs;
+    if (state.filled === 0 || Math.abs(step) >= SAMPLE_INTERVAL_MS) {
+      const direction = state.filled === 0 ? 0 : Math.sign(step);
+      if (direction !== 0 && state.direction !== 0 && direction !== state.direction) {
+        // Richtungsumkehr: Die bisherigen Stützstellen liegen jetzt vor dem
+        // Objekt, nicht hinter ihm. Die Spur beginnt am Umkehrpunkt neu.
+        state.filled = 0;
+        state.writeIndex = 0;
+        state.direction = 0;
+      } else if (direction !== 0) {
+        state.direction = direction;
+      }
       state.lastSampleMs = now;
       for (let i = 0; i < count; i += 1) {
         const base = i * TELEMETRY_STRIDE;

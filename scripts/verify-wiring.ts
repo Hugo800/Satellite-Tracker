@@ -3,7 +3,9 @@
  * scripts/verify-orientation.ts nicht erreichen, weil sie die Bild- und
  * Eventlogik direkt aufrufen: wie CameraRig seine Bildfunktionen in den
  * Frame-Takt hängt und was der Effekt-Rumpf von useDeviceOrientation
- * anmeldet, abmeldet und zurücksetzt.
+ * anmeldet, abmeldet und zurücksetzt. Dazu, ob die Bahnspur aus OrbitTrail
+ * tatsächlich gezeichnet würde: Objekt *und* Material sichtbar, gelesen in
+ * dem Moment, in dem R3F `gl.render` aufruft (Abschnitt C).
  *
  * Dafür laufen die echten Komponenten im echten Renderer von React Three Fiber
  * (`createRoot`, `frameloop: 'never'`, Bilder per `advance`), mit dem echten
@@ -21,13 +23,15 @@
 import { createElement, type FunctionComponent } from 'react';
 import { act, advance, createRoot, type RootState } from '@react-three/fiber';
 import { Euler, Matrix4, PerspectiveCamera, Quaternion, Vector3 } from 'three';
+import type { Line2 } from 'three-stdlib';
 import type { StoreApi, UseBoundStore } from 'zustand';
 import { CameraRig } from '../src/components/canvas/CameraRig';
+import { OrbitTrail } from '../src/components/canvas/OrbitTrail';
 import { useDeviceOrientation } from '../src/hooks/useDeviceOrientation';
 import { DEG, RAD, angleDelta, normalizeAngle } from '../src/math/coords';
 import { decimalYear, magneticDeclinationDeg } from '../src/math/declination';
 import { arSmoothingFactor, attitudeToCamera } from '../src/math/orientation';
-import { orientationState, viewState } from '../src/state/runtime';
+import { orientationState, trailState, viewState } from '../src/state/runtime';
 import { useAppStore } from '../src/state/store';
 
 // React prüft Updates nur innerhalb von act() synchron durch.
@@ -45,6 +49,18 @@ function expect(label: string, ok: boolean, detail: string): void {
     console.error(`  ✗ ${label}: ${detail}`);
   }
 }
+
+// drei <Line> legt seine Anfangsgeometrie aus `Vector3`-Punkten an und prüft
+// sie per `instanceof`. Das esbuild-Bündel enthält three zweimal, die Prüfung
+// schlägt fehl, und three meldet beim Einhängen einen NaN-Radius (wie in
+// scripts/verify-selection.ts). OrbitTrail überschreibt die Geometrie mit der
+// ersten Spur; im Vite-Build gibt es nur ein three.
+const consoleError = console.error.bind(console);
+console.error = (...args: unknown[]) => {
+  const first = typeof args[0] === 'string' ? args[0] : '';
+  if (first.startsWith('THREE.LineSegmentsGeometry.computeBoundingSphere')) return;
+  consoleError(...args);
+};
 
 const f = (value: number, digits = 2): string => value.toFixed(digits).replace('.', ',');
 const wrap180 = (deg: number): number => angleDelta(deg * DEG, 0) * RAD;
@@ -67,8 +83,16 @@ class FakeTarget {
 
 type Store = UseBoundStore<StoreApi<RootState>>;
 
-/** Hängt `component` in eine eigene R3F-Wurzel; Bilder laufen nur über `frame()`. */
-async function mount(component: FunctionComponent, camera = new PerspectiveCamera(70, 0.5, 0.01, 2000)) {
+/**
+ * Hängt `component` in eine eigene R3F-Wurzel; Bilder laufen nur über
+ * `frame()`. `onRender` läuft bei jedem `gl.render` – nach allen
+ * Bildfunktionen, also mit dem Stand, der gezeichnet würde.
+ */
+async function mount(
+  component: FunctionComponent,
+  camera = new PerspectiveCamera(70, 0.5, 0.01, 2000),
+  onRender: () => void = () => {},
+) {
   const element = Object.assign(new FakeTarget(), {
     style: {},
     clientWidth: 400,
@@ -78,7 +102,7 @@ async function mount(component: FunctionComponent, camera = new PerspectiveCamer
     releasePointerCapture() {},
   });
   // R3F erkennt einen fertigen Renderer an `render`; gezeichnet wird nichts.
-  const gl = { domElement: element, render() {}, setSize() {}, setPixelRatio() {} };
+  const gl = { domElement: element, render: onRender, setSize() {}, setPixelRatio() {} };
   const root = createRoot({} as HTMLCanvasElement);
   let store: Store | null = null;
   await act(async () => {
@@ -290,7 +314,7 @@ console.log('B. useDeviceOrientation im echten Effekt: Deklination, Bildschirmdr
 /**
  * `window` des Hooks: echtes EventTarget, zählt die angemeldeten Listener.
  * Timer laufen nicht – die Warnung „Keine Sensordaten“ nach 2,5 s prüft hier
- * nichts.
+ * nichts, ebenso wenig die Nachführung der Bahnspur in Abschnitt C.
  */
 class FakeWindow extends EventTarget {
   readonly DeviceOrientationEvent = class {};
@@ -324,6 +348,12 @@ class FakeWindow extends EventTarget {
   }
 
   clearTimeout(): void {}
+
+  setInterval(): number {
+    return 0;
+  }
+
+  clearInterval(): void {}
 }
 
 const fakeWindow = new FakeWindow();
@@ -452,6 +482,119 @@ const headingError = (m: Matrix): number => Math.abs(wrap180(orientationState.he
     `available vorher ${availableBefore}, nach dem Aushängen ${availableAfter}; Listener danach ${attachedAfter}`,
   );
   await setStore({ arEnabled: false });
+}
+
+/* --- C. OrbitTrail: Ist die Bahnspur beim Zeichnen sichtbar? --- */
+console.log('C. OrbitTrail: Objekt und Material der Bahnspur beim Zeichnen sichtbar');
+{
+  // Anlass: OrbitTrail gab `visible={false}` als Prop an drei <Line>. drei
+  // reicht es auch an das LineMaterial weiter; `material.visible` blieb false,
+  // und das in useFrame gesetzte `line.visible = true` erzeugte nie einen
+  // Draw-Call (Commit e49bcde). Eine Prüfung nur von `line.visible` sieht das
+  // nicht. Hier wird bei jedem `gl.render` gelesen, was R3F zeichnen würde:
+  // Objekt und Material sichtbar, und nie die Platzhalterpunkte im Nadir.
+  //
+  // Ohne Worker-Pool: `engine.requestTrail` findet keinen Pool und schickt
+  // nichts; die Antwort des Shards wird in `trailState` geschrieben wie vom
+  // Hook (useSatelliteEngine.ts, Fall 'trail').
+  const SAMPLES = 220;
+  const ID = '25544';
+  /** Spur über dem Horizont: Höhe 20° … 60°, Azimut 100° … 250°. */
+  const trailPoints = (): Float32Array => {
+    const points = new Float32Array(SAMPLES * 3);
+    for (let i = 0; i < SAMPLES; i += 1) {
+      const az = (100 + (150 * i) / (SAMPLES - 1)) * DEG;
+      const el = (20 + 40 * Math.sin((Math.PI * i) / (SAMPLES - 1))) * DEG;
+      points[i * 3] = Math.cos(el) * Math.sin(az);
+      points[i * 3 + 1] = Math.sin(el);
+      points[i * 3 + 2] = -Math.cos(el) * Math.cos(az);
+    }
+    return points;
+  };
+  const deliver = () => {
+    trailState.noradId = ID;
+    trailState.points = trailPoints();
+    trailState.timeMs = Date.now();
+    trailState.version += 1;
+  };
+
+  let store: Store | null = null;
+  const findLine = (): Line2 | null => {
+    let line: Line2 | null = null;
+    store?.getState().scene.traverse((object) => {
+      if ((object as Line2).isLine2) line = object as Line2;
+    });
+    return line;
+  };
+  /** Je `gl.render`: Linie da? Objekt, Material sichtbar? Höhe des ersten Punkts (NaN ohne Linie). */
+  let renders: Array<{ line: boolean; visible: boolean; material: boolean; firstY: number }> = [];
+  const trail = await mount(OrbitTrail, undefined, () => {
+    const line = findLine();
+    const start = line?.geometry.getAttribute('instanceStart') as { data: { array: Float32Array } } | undefined;
+    renders.push({
+      line: line !== null,
+      visible: line?.visible === true,
+      material: line !== null && (line.material as { visible: boolean }).visible,
+      firstY: start ? start.data.array[1] : Number.NaN,
+    });
+  });
+  store = trail.store;
+  /** Liefert die seit dem letzten Aufruf gesammelten Bilder und beginnt neu. */
+  const take = () => {
+    const list = renders;
+    renders = [];
+    return list;
+  };
+  const drawn = (list: typeof renders) => list.filter((r) => r.line && r.visible && r.material);
+  const placeholder = (list: typeof renders) => drawn(list).filter((r) => !(r.firstY > 0));
+
+  // 1. Auswahl ohne Spur: Die Linie hängt, wird aber nie gezeichnet.
+  await setStore({ showTrails: true });
+  await act(async () => useAppStore.getState().select(ID));
+  take();
+  for (let i = 0; i < 5; i += 1) trail.frame();
+  const waiting = take();
+  // 2. Spur trifft ein.
+  deliver();
+  for (let i = 0; i < 3; i += 1) trail.frame();
+  const arrived = take();
+  // 3. Spuren aus und wieder an; die Antwort trifft vor dem ersten Bild nach
+  //    dem Wiedereinhängen ein. Die neue Linie erscheint dann gleich im ersten
+  //    Bild – mit den Punkten der Spur, nie mit den Platzhaltern.
+  await setStore({ showTrails: false });
+  trail.frame();
+  take();
+  await setStore({ showTrails: true });
+  deliver();
+  for (let i = 0; i < 3; i += 1) trail.frame();
+  const remounted = take();
+  // 4. Abwählen und neu wählen: bis zur neuen Spur nichts zu sehen.
+  await act(async () => useAppStore.getState().select(null));
+  trail.frame();
+  take();
+  await act(async () => useAppStore.getState().select(ID));
+  for (let i = 0; i < 5; i += 1) trail.frame();
+  const reselected = take();
+  await trail.unmount();
+  await act(async () => useAppStore.getState().select(null));
+
+  const lastArrived = arrived[arrived.length - 1];
+  expect(
+    'Bahnspur wird gezeichnet: Objekt und Material sichtbar',
+    waiting.length === 5 && waiting.every((r) => r.line) && drawn(waiting).length === 0 &&
+      lastArrived !== undefined && lastArrived.visible && lastArrived.material && placeholder(arrived).length === 0,
+    `vor der Spur ${drawn(waiting).length} von ${waiting.length} Bildern gezeichnet (Linie eingehängt: ` +
+      `${waiting.every((r) => r.line) ? 'ja' : 'nein'}); nach der Spur line.visible ${lastArrived?.visible}, ` +
+      `material.visible ${lastArrived?.material}, erster Punkt bei y = ${f(lastArrived?.firstY ?? Number.NaN, 1)} (über dem Horizont)`,
+  );
+  expect(
+    'Nach Wiedereinhängen nie die Platzhalter im Nadir',
+    placeholder(remounted).length === 0 && drawn(remounted).length === remounted.length && remounted.length === 3 &&
+      reselected.length === 5 && drawn(reselected).length === 0,
+    `Spuren aus/an mit eingetroffener Spur: ${drawn(remounted).length} von ${remounted.length} Bildern gezeichnet, ` +
+      `${placeholder(remounted).length} davon mit Platzhaltern; neu gewählt ohne Spur: ` +
+      `${drawn(reselected).length} von ${reselected.length} gezeichnet`,
+  );
 }
 
 console.log(`${checks} Prüfungen, ${failures} Fehlschläge`);

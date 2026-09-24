@@ -145,8 +145,12 @@ export function CelestialBodies(): React.JSX.Element {
   const sunTexture = useMemo(createSunTexture, []);
   useEffect(() => () => sunTexture.dispose(), [sunTexture]);
 
-  // Der Beleuchtungsgrad ändert sich um rund 3 %/Tag; quantisiert wird die
-  // Textur damit praktisch nur einmal pro Sitzung neu gezeichnet.
+  // Der Beleuchtungsgrad ändert sich um höchstens 11,5 % je Tag (im Mittel
+  // 6,8 %; astronomy-engine, das Jahr 2026 stündlich abgetastet). Auf 1/64
+  // quantisiert, wird die Textur in Echtzeit also frühestens nach gut drei
+  // Stunden neu gezeichnet. Im Zeitraffer entsprechend öfter: bei ×600
+  // frühestens nach rund 20 s, bei ×60 000 bis zu viermal je Sekunde – so oft,
+  // wie useCelestialBodies den Mond dann aktualisiert.
   const illuminationStep = Math.round(clamp(moon.illumination, 0, 1) * 64) / 64;
   const moonTexture = useMemo(() => createMoonTexture(illuminationStep), [illuminationStep]);
   useEffect(() => () => moonTexture.dispose(), [moonTexture]);

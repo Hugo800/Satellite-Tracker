@@ -28,7 +28,22 @@ export interface TelemetryStore {
   /** Kapazität des Buffers in Objekten; wächst in Blöcken mit dem Katalog. */
   capacity: number;
   data: Float32Array;
+  /**
+   * Virtuelle Zeit des jüngsten Ticks im zuletzt freigegebenen Stand. Folgt
+   * der Zeitbasis in beide Richtungen – nach einem Sprung zurück ebenso wie im
+   * Rückwärtslauf (scripts/verify-timetravel.ts, Abschnitte B und E).
+   */
   timeMs: number;
+  /**
+   * `TimeBase.epoch` der Daten in `data`. Wechselt, sobald jeder Shard einen
+   * Tick der neuen Epoche geliefert hat – oder früher, wenn der Wachhund den
+   * Übergang erzwingt, weil ein Shard ausbleibt: Dann sind dessen Plätze
+   * ausgeblendet (`range` NaN, Höhe −90°), bis er wieder liefert
+   * (useSatelliteEngine.ts, `commitEpoch`). Bis zum Wechsel bleibt der alte
+   * Stand in `data` unverändert stehen. Spuren und Interpolation erkennen
+   * daran einen Sprung.
+   */
+  epoch: number;
   /**
    * Monoton steigend – Overlays erkennen daran neue Daten. Der Zähler springt
    * erst weiter, wenn *alle* Shards des Worker-Pools geliefert haben, sodass
@@ -46,6 +61,7 @@ export const telemetry: TelemetryStore = {
   capacity: 0,
   data: new Float32Array(0),
   timeMs: Date.now(),
+  epoch: 0,
   revision: 0,
   intervalMs: 100,
   computeMs: 0,
@@ -135,8 +151,9 @@ export const catalogIndex: {
    * Katalogfassung bekommt. Wer die Auswahl in einen Platz übersetzt – Karte,
    * Ring, Radar, Routing an den Shard –, schlägt hier nach: je Auswahl oder
    * Katalogwechsel, beim Routing zusätzlich je Anfrage (auch bei der
-   * Bahnspur-Nachführung alle 12 s), aber nie je Bild. Es stehen nur Objekte mit
-   * gültigem Bahnsatz darin, denn nur für sie meldet der Worker Metadaten.
+   * Bahnspur-Nachführung, alle 12 s virtuelle Zeit, im Zeitraffer höchstens
+   * viermal je Sekunde), aber nie je Bild. Es stehen nur Objekte mit gültigem
+   * Bahnsatz darin, denn nur für sie meldet der Worker Metadaten.
    *
    * Anders als die frühere Index-Map (siehe `meta`) trägt sie mehr als eine
    * Abfrage: Auflösung der Auswahl, Routing, künftig die Merkliste. Die Map in
@@ -222,10 +239,21 @@ export const orientationState: OrientationState = {
  * `noradId` nennt das Objekt, zu dem `points` gehört. OrbitTrail zeichnet nur,
  * wenn es die aktuelle Auswahl ist – das ist die Korrelation, die eine
  * verspätete Antwort für ein vorher gewähltes Objekt vom Bild fernhält.
+ *
+ * `timeMs` ist die virtuelle Zeit, auf die sich das Zeitfenster der Anfrage
+ * bezog (−25 … +70 min in OrbitTrail). Bei einem Zeitsprung leert der Pool
+ * die Spur sofort, und eine Antwort, die noch mit der alten Zeitbasis
+ * gerechnet wurde, landet nicht mehr hier (useSatelliteEngine.ts).
  */
-export const trailState: { noradId: NoradId | null; points: Float32Array | null; version: number } = {
+export const trailState: {
+  noradId: NoradId | null;
+  points: Float32Array | null;
+  timeMs: number | null;
+  version: number;
+} = {
   noradId: null,
   points: null,
+  timeMs: null,
   version: 0,
 };
 

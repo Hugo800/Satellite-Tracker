@@ -1,8 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { GROUP_LOAD_ORDER } from '../data/tleSources';
-import { TELEMETRY_STRIDE } from '../math/telemetryLayout';
+import { TELEMETRY_STRIDE, T_EL, T_RANGE } from '../math/telemetryLayout';
 import { catalogIndex, ensureTelemetryCapacity, telemetry, trailState } from '../state/runtime';
-import { useAppStore } from '../state/store';
+import { isRealtime, selectTimeEpoch, useAppStore, virtualNow, virtualTimeAt } from '../state/store';
 import type {
   NoradId,
   SatelliteGroup,
@@ -38,6 +38,12 @@ function pickShardCount(): number {
   return Math.max(2, Math.min(6, cores - 1));
 }
 
+/** Tick eines Shards, der auf den Wechsel der Zeitepoche wartet. */
+interface StagedTick {
+  count: number;
+  buffer: ArrayBuffer;
+}
+
 interface Pool {
   workers: Worker[];
   shardCount: number;
@@ -48,15 +54,21 @@ interface Pool {
   windowStartedAt: number;
   windowTicks: number;
   sawTick: boolean;
+  /** Virtuelle Zeit des zuletzt angenommenen Ticks – wird bei Freigabe zu `telemetry.timeMs`. */
+  latestTickMs: number;
+  /**
+   * Ticks der neuen Epoche, solange `telemetry.epoch` noch die alte ist.
+   * Übernommen werden sie in einem Zug (`commitEpoch`): sobald jeder Shard
+   * einen geliefert hat oder der Wachhund den Übergang erzwingt – dann ohne
+   * die Shards, die noch nichts geliefert haben; deren Plätze werden
+   * ausgeblendet. Bis dahin bleibt der alte Stand in `telemetry.data` stehen.
+   */
+  staged: Map<number, StagedTick>;
+  /** `performance.now()` des letzten Epochenwechsels – Bezug für den Wachhund im Übergang. */
+  epochChangedAt: number;
 }
 
 let pool: Pool | null = null;
-
-let timeBase: TimeBase = {
-  originRealMs: Date.now(),
-  originVirtualMs: Date.now(),
-  scale: 1,
-};
 
 let catalogTotal = 0;
 let catalogDirty = false;
@@ -101,6 +113,37 @@ function sendForId(noradId: NoradId, message: WorkerRequest): boolean {
   return true;
 }
 
+/**
+ * Setzt eine neue Zeitbasis: an die Shards und in den Store.
+ *
+ * Die Effekte, die auf die neue Basis hin Anfragen verschicken (Überflugliste
+ * unten, Bahnspur in OrbitTrail), laufen erst nach dem Rendern, also nach
+ * diesem Aufruf – die `time`-Nachricht ist dann an jeden Shard verschickt,
+ * gleich in welcher Reihenfolge `broadcast` und `setTimeBase` unten stehen. Da
+ * `postMessage` an einen Worker in der Reihenfolge des Absendens ankommt,
+ * rechnet der Shard ihre Anfragen mit der neuen Basis
+ * (scripts/verify-timetravel.ts, Abschnitt H: während `jumpTo` gehen nur
+ * `time`-Nachrichten hinaus).
+ */
+function applyTimeBase(next: TimeBase): void {
+  const previous = useAppStore.getState().timeBase;
+  if (pool && next.epoch !== previous.epoch) beginEpoch(pool);
+  if (next.epoch !== previous.epoch) {
+    // Die Bahnspur der alten Zeit sofort verwerfen, nicht erst, wenn die neue
+    // eintrifft: OrbitTrail zeichnet nur eine Spur mit gesetzter ID.
+    trailState.noradId = null;
+    trailState.points = null;
+    trailState.timeMs = null;
+    trailState.version += 1;
+  }
+  broadcast({ type: 'time', base: next });
+  useAppStore.getState().setTimeBase(next);
+}
+
+function assertFinite(name: string, value: number): void {
+  if (!Number.isFinite(value)) throw new RangeError(`${name} muss endlich sein, war ${value}`);
+}
+
 /** Imperative API des Worker-Pools – bewusst außerhalb von React. */
 export const engine = {
   requestTrail(noradId: NoradId, fromMin = -25, toMin = 70, samples = 220): boolean {
@@ -109,16 +152,50 @@ export const engine = {
   requestPass(noradId: NoradId, searchHours = 48): boolean {
     return sendForId(noradId, { type: 'pass', noradId, searchHours });
   },
-  setTimeScale(value: number): void {
-    // Zurück auf Echtzeit heißt: wieder auf die Wanduhr aufsetzen. Sonst
-    // behielte die Szene den Vorlauf, den der Zeitraffer angesammelt hat.
+  /**
+   * Geschwindigkeit der virtuellen Zeit: 1 = Echtzeit, 60 = eine Minute je
+   * Sekunde, negativ = rückwärts, 0 = angehalten.
+   *
+   * Die virtuelle Zeit läuft im Moment des Wechsels stetig weiter, auch bei
+   * 1 – wer nach einem Sprung in normaler Geschwindigkeit weiterlaufen will,
+   * bleibt in seiner Zeit. Zurück zur Wanduhr führt `resetToRealTime`.
+   *
+   * Rückwärts ist erlaubt: SGP4 rechnet vor der TLE-Epoche wie danach, und
+   * alle Verbraucher kommen damit zurecht – die Spuren tasten mit dem Betrag
+   * des Zeitschritts ab und beginnen bei einer Richtungsumkehr neu
+   * (SatelliteTrails), die Überflugliste wird neu angefordert, sobald die
+   * virtuelle Zeit vor ihrem Suchbeginn liegt (unten), Sonne und Mond lesen
+   * die virtuelle Zeit (useCelestialBodies). Geprüft in
+   * scripts/verify-timetravel.ts, Abschnitte E, G und J.
+   */
+  setTimeScale(scale: number): void {
+    assertFinite('scale', scale);
+    const current = useAppStore.getState().timeBase;
     const now = Date.now();
-    timeBase = {
+    applyTimeBase({
       originRealMs: now,
-      originVirtualMs: value === 1 ? now : virtualNow(now),
-      scale: value,
-    };
-    broadcast({ type: 'time', base: timeBase });
+      originVirtualMs: virtualTimeAt(current, now),
+      scale,
+      epoch: current.epoch,
+    });
+  },
+  /** Springt auf die virtuelle Zeit `virtualMs` (ms seit 1970, UTC); die Geschwindigkeit bleibt. */
+  jumpTo(virtualMs: number): void {
+    assertFinite('virtualMs', virtualMs);
+    const current = useAppStore.getState().timeBase;
+    applyTimeBase({
+      originRealMs: Date.now(),
+      originVirtualMs: virtualMs,
+      scale: current.scale,
+      epoch: current.epoch + 1,
+    });
+  },
+  /** Zurück auf die Wanduhr, Geschwindigkeit 1. Läuft die Szene schon in Echtzeit, passiert nichts. */
+  resetToRealTime(): void {
+    const current = useAppStore.getState().timeBase;
+    if (isRealtime(current)) return;
+    const now = Date.now();
+    applyTimeBase({ originRealMs: now, originVirtualMs: now, scale: 1, epoch: current.epoch + 1 });
   },
   reload(groups: SatelliteGroup[]): void {
     sendTo(0, { type: 'load', groups });
@@ -135,10 +212,6 @@ export const engine = {
     return pool?.shardCount ?? 0;
   },
 };
-
-function virtualNow(now = Date.now()): number {
-  return timeBase.originVirtualMs + (now - timeBase.originRealMs) * timeBase.scale;
-}
 
 /* ------------------------------------------------------------------ */
 /* Telemetrie einsammeln                                                */
@@ -171,6 +244,57 @@ function scatter(shard: number, count: number, src: Float32Array, shardCount: nu
   }
 }
 
+/**
+ * Blendet alle Plätze eines Shards aus – wie ein Objekt ohne gültige
+ * Propagation: `range = NaN` für alle, die danach fragen (Feld, Spuren,
+ * Radar, Tap, `readSample`), dazu Höhe −90° für HighlightMarkers, das nur die
+ * Höhe liest. Der Azimut bleibt der der alten Zeit; SatelliteField
+ * interpoliert deshalb nie von einem ungültigen Platz aus.
+ */
+function invalidateShard(shard: number, shardCount: number): void {
+  const dst = telemetry.data;
+  for (let d = shard * TELEMETRY_STRIDE; d + TELEMETRY_STRIDE <= dst.length; d += shardCount * TELEMETRY_STRIDE) {
+    dst[d + T_EL] = -Math.PI / 2;
+    dst[d + T_RANGE] = Number.NaN;
+  }
+}
+
+function recycle(shard: number, buffer: ArrayBuffer): void {
+  sendTo(shard, { type: 'recycle', buffer }, [buffer]);
+}
+
+/** Ein Sprung beginnt: Gesammelte Ticks einer vorigen, nie freigegebenen Epoche sind wertlos. */
+function beginEpoch(state: Pool): void {
+  for (const [shard, staged] of state.staged) recycle(shard, staged.buffer);
+  state.staged.clear();
+  state.epochChangedAt = performance.now();
+}
+
+/**
+ * Übernimmt die gesammelten Ticks der neuen Epoche in einem Zug.
+ *
+ * `force` (Wachhund): Ein Shard, der seit dem Sprung nichts geliefert hat,
+ * steht noch mit Werten der alten Zeit im Buffer. Seine Plätze werden
+ * ausgeblendet statt stehen gelassen – ein Himmel, in dem ein Teil fehlt,
+ * ist besser als einer, in dem ein Teil Stunden oder Tage daneben liegt. Mit
+ * seinem nächsten Tick kehren sie zurück (scripts/verify-timetravel.ts,
+ * Abschnitt C).
+ */
+function commitEpoch(state: Pool, epoch: number, force: boolean): void {
+  for (const [shard, staged] of state.staged) {
+    scatter(shard, staged.count, new Float32Array(staged.buffer), state.shardCount);
+    recycle(shard, staged.buffer);
+  }
+  if (force) {
+    for (let shard = 0; shard < state.shardCount; shard += 1) {
+      if (!state.staged.has(shard)) invalidateShard(shard, state.shardCount);
+    }
+  }
+  state.staged.clear();
+  telemetry.epoch = epoch;
+  completeTickIfReady(state, true);
+}
+
 /** Über so viele vollständige Ticks wird die Taktdauer gemittelt. */
 const INTERVAL_WINDOW_TICKS = 10;
 
@@ -201,6 +325,7 @@ function completeTickIfReady(state: Pool, force: boolean): void {
   }
 
   state.pending = new Set(Array.from({ length: state.shardCount }, (_, i) => i));
+  telemetry.timeMs = state.latestTickMs;
   telemetry.revision += 1;
 }
 
@@ -257,6 +382,28 @@ function flushCatalog(setCatalog: (catalog: SatelliteMeta[]) => void): void {
   setCatalog(catalog);
 }
 
+/**
+ * Nach so viel virtueller Zeit hinter dem Suchbeginn wird die Überflugliste
+ * neu gesucht. Die Suche reicht 48 h weit; in Echtzeit bleibt so rund ein Tag
+ * Vorschau.
+ *
+ * Im Zeitraffer weniger: Geprüft wird einmal je Sekunde Wanduhr (Intervall
+ * unten), neu angefragt höchstens alle `PASS_RETRY_MS`, und bis die Suche im
+ * Shard beginnt, läuft die virtuelle Zeit weiter. Je Prüfabstand sind das bei
+ * ×600 zehn Minuten, bei ×60 000 fast 17 h. Dort begann die neue Suche meist
+ * 33,1 bis 33,4 h nach der alten, mit knapp 15 h Vorschau; in 7 von 89
+ * Läufen aber eine Prüfung später, 49,8 h danach – dann war die alte Liste
+ * schon 1,8 h abgelaufen (scripts/verify-timetravel.ts, G4). Bei ×60 000
+ * sind das 0,1 s Wanduhr ohne gültige Liste.
+ */
+const PASS_REFRESH_AFTER_MS = 24 * 3600_000;
+/**
+ * Mindestabstand zweier Nachführungen in Echtzeit. Im schnellen Rückwärtslauf
+ * läge die virtuelle Zeit fast sofort wieder vor dem Suchbeginn; ohne Sperre
+ * ginge dann jede Sekunde eine 48-h-Suche an denselben Shard.
+ */
+const PASS_RETRY_MS = 2000;
+
 export interface EngineOptions {
   /** Ziel-Propagationsrate in ms. 100 ms = 10 Hz, dazwischen interpoliert der Shader. */
   intervalMs?: number;
@@ -275,6 +422,7 @@ export function useSatelliteEngine({ intervalMs = 100 }: EngineOptions = {}): vo
   const setPasses = useAppStore((s) => s.setPasses);
   const selectedId = useAppStore((s) => s.selectedId);
   const selectedMeta = useAppStore((s) => s.selectedMeta);
+  const timeEpoch = useAppStore(selectTimeEpoch);
   const started = useRef(false);
 
   useEffect(() => {
@@ -288,6 +436,9 @@ export function useSatelliteEngine({ intervalMs = 100 }: EngineOptions = {}): vo
       windowStartedAt: performance.now(),
       windowTicks: 0,
       sawTick: false,
+      latestTickMs: telemetry.timeMs,
+      staged: new Map(),
+      epochChangedAt: performance.now(),
     };
     telemetry.intervalMs = intervalMs;
     pool = state;
@@ -314,15 +465,39 @@ export function useSatelliteEngine({ intervalMs = 100 }: EngineOptions = {}): vo
     const handle = (shard: number, msg: WorkerResponse) => {
       switch (msg.type) {
         case 'tick': {
+          const epoch = useAppStore.getState().timeBase.epoch;
+          if (msg.epoch !== epoch) {
+            // Gerechnet mit der Basis vor dem letzten Sprung: Der Shard hatte
+            // die `time`-Nachricht noch nicht verarbeitet. Übernommen stünde
+            // ein Teil des Himmels in der alten Zeit
+            // (scripts/verify-timetravel.ts, Abschnitt B).
+            recycle(shard, msg.buffer);
+            break;
+          }
+          state.sawTick = true;
+          // Zuweisung statt Maximum: Nach einem Sprung zurück und im
+          // Rückwärtslauf wird die virtuelle Zeit kleiner.
+          state.latestTickMs = msg.time;
+
+          if (telemetry.epoch !== epoch) {
+            // Übergang: sammeln, bis jeder Shard die neue Epoche geliefert
+            // hat. Direkt verteilt, stünden im Buffer für einen Tick alte und
+            // neue Zeit nebeneinander – Radar, Liste und Karte lesen ihn
+            // jederzeit, nicht nur bei einer neuen Revision.
+            const previous = state.staged.get(shard);
+            if (previous) recycle(shard, previous.buffer);
+            state.staged.set(shard, { count: msg.count, buffer: msg.buffer });
+            if (state.staged.size === state.shardCount) commitEpoch(state, epoch, false);
+            break;
+          }
+
           const src = new Float32Array(msg.buffer);
           scatter(shard, msg.count, src, state.shardCount);
           // Buffer zurückgeben – der Worker füllt ihn beim nächsten Tick erneut,
           // statt 10× pro Sekunde ein neues Megabyte zu allozieren.
-          sendTo(shard, { type: 'recycle', buffer: msg.buffer }, [msg.buffer]);
+          recycle(shard, msg.buffer);
 
-          telemetry.timeMs = Math.max(telemetry.timeMs, msg.time);
           state.pending.delete(shard);
-          state.sawTick = true;
           completeTickIfReady(state, false);
           break;
         }
@@ -349,19 +524,24 @@ export function useSatelliteEngine({ intervalMs = 100 }: EngineOptions = {}): vo
           setStatus(msg.message, msg.loading);
           break;
 
-        case 'trail':
+        case 'trail': {
+          const { selectedId, timeBase } = useAppStore.getState();
           // Stale-Guard: Eine Spur für ein Objekt, das nicht mehr gewählt ist,
           // wird verworfen. Sonst überschriebe eine verspätete Antwort die
           // frische Spur der neuen Auswahl, und die bliebe bis zur nächsten
-          // Nachführung (12 s, OrbitTrail) unsichtbar.
-          if (msg.noradId !== useAppStore.getState().selectedId) break;
+          // Nachführung (OrbitTrail, 12 s virtuelle Zeit) unsichtbar.
+          if (msg.noradId !== selectedId) break;
+          // Dasselbe für die Zeit: eine Spur, gerechnet vor dem letzten Sprung.
+          if (msg.epoch !== timeBase.epoch) break;
           trailState.noradId = msg.noradId;
           trailState.points = msg.points;
+          trailState.timeMs = msg.timeMs;
           trailState.version += 1;
           break;
+        }
 
         case 'pass':
-          setPasses(msg.noradId, msg.passes);
+          setPasses(msg.noradId, msg.passes, msg.epoch, msg.fromMs);
           break;
 
         case 'error':
@@ -378,15 +558,30 @@ export function useSatelliteEngine({ intervalMs = 100 }: EngineOptions = {}): vo
       worker.onmessage = (event: MessageEvent<WorkerResponse>) => handle(shard, event.data);
       worker.onerror = (event) => pushError(`Worker ${shard}: ${event.message}`);
       worker.postMessage({ type: 'init', shardIndex: shard, shardCount });
-      worker.postMessage({ type: 'time', base: timeBase });
+      worker.postMessage({ type: 'time', base: useAppStore.getState().timeBase });
       workers.push(worker);
     }
 
     // Fällt ein Shard aus (defektes TLE, gedrosselter Thread), stünde der
     // Himmel still, weil die Revision auf ihn wartet. Der Wachhund gibt den
     // Tick nach dem Vierfachen der Zielrate trotzdem frei.
+    //
+    // Nach einem Zeitsprung hieße „trotzdem freigeben“: Der fehlende Shard
+    // stünde mit Werten der alten Zeit neben den übrigen. `commitEpoch`
+    // blendet ihn deshalb aus. Gemessen wird dann ab dem Sprung und am
+    // tatsächlichen Takt, falls der langsamer ist als die Zielrate – ein
+    // gesunder, nur langsamer Shard soll nicht ausgeblendet werden, weil er
+    // seinen ersten Tick der neuen Epoche noch rechnet.
     const watchdog = window.setInterval(() => {
       if (!state.sawTick) return;
+      const epoch = useAppStore.getState().timeBase.epoch;
+      if (telemetry.epoch !== epoch) {
+        if (state.staged.size === 0) return;
+        const since = performance.now() - Math.max(state.lastRevisionAt, state.epochChangedAt);
+        if (since < Math.max(intervalMs, telemetry.intervalMs) * 4) return;
+        commitEpoch(state, epoch, true);
+        return;
+      }
       if (state.pending.size === 0) return;
       if (performance.now() - state.lastRevisionAt < intervalMs * 4) return;
       completeTickIfReady(state, true);
@@ -433,8 +628,29 @@ export function useSatelliteEngine({ intervalMs = 100 }: EngineOptions = {}): vo
   // nicht) und wenn echte Bahndaten den Offline-Fallback ersetzen. Eine
   // erneute Wahl desselben Objekts ändert nichts davon und rechnet deshalb
   // nicht noch einmal (store.ts, `select`).
+  //
+  // `timeEpoch`: Nach einem Zeitsprung hat der Store die Liste schon geleert
+  // (`setTimeBase`); ohne neue Anfrage bliebe sie leer.
+  //
+  // Dazu die Nachführung: Die Liste gilt ab `passFromMs`. Läuft die virtuelle
+  // Zeit davor (rückwärts) oder mehr als einen Tag darüber hinaus (Zeitraffer,
+  // oder die App bleibt so lange offen), fehlen vorn Überflüge bzw. hinten
+  // die Vorschau. Dann wird neu gesucht; die alte Liste bleibt bis zur
+  // Antwort stehen.
   useEffect(() => {
     if (selectedMeta === null) return;
-    engine.requestPass(selectedMeta.noradId);
-  }, [selectedMeta]);
+    const noradId = selectedMeta.noradId;
+    engine.requestPass(noradId);
+    let requestedAt = performance.now();
+    const id = window.setInterval(() => {
+      const { passId, passFromMs } = useAppStore.getState();
+      if (passId !== noradId || passFromMs === null) return;
+      const now = virtualNow();
+      if (now >= passFromMs && now - passFromMs <= PASS_REFRESH_AFTER_MS) return;
+      if (performance.now() - requestedAt < PASS_RETRY_MS) return;
+      requestedAt = performance.now();
+      engine.requestPass(noradId);
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [selectedMeta, timeEpoch]);
 }
