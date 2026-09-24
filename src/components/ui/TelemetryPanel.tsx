@@ -8,7 +8,9 @@ import {
   formatDay,
   formatDurationSec,
   formatNumber,
+  formatTleAge,
   passCountdown,
+  tleAgeSeverity,
 } from '../../utils/format';
 import type { PassPrediction } from '../../types';
 
@@ -59,6 +61,17 @@ function PassRow({ pass, running }: { pass: PassPrediction; running: boolean }):
   // Uhrzeit steht „…“, und die Dauer ist nur eine Untergrenze.
   const openStart = pass.aosOpen && startMs <= pass.aos;
   const openEnd = pass.losOpen && endMs >= pass.los;
+  // `traceArc` (propagation.ts) verfolgt den Bogen nur bis zum Suchende plus
+  // 1 h Kulanz und hält dabei den bis dahin höchsten Punkt fest; findet sie
+  // keinen Horizontdurchgang mehr, bricht sie dort ab UND setzt `losOpen`
+  // (`traceArc`: „Stark exzentrische Bahnen bleiben länger über dem Horizont,
+  // als das Suchfenster reicht“ – derselbe Fall, der auch die Dauer nur als
+  // Untergrenze liefert). Der bis dahin gesehene Höchststand kann also noch
+  // steigen, wenn der Satellit beim Abbruch weiter aufsteigt – gemessen bis
+  // zu 24,4° unter dem echten. `aosOpen` allein betrifft nur den Suchbeginn
+  // rückwärts (`findRunningStart`) und schneidet den vorwärts verfolgten Bogen
+  // nicht ab – dafür also kein Vorbehalt nötig.
+  const maxUncertain = pass.losOpen;
 
   const badge = !sunlit
     ? { text: 'Erdschatten', color: 'var(--label-2)' }
@@ -99,7 +112,10 @@ function PassRow({ pass, running }: { pass: PassPrediction; running: boolean }):
           {openStart || openEnd ? '≥ ' : ''}
           {formatDurationSec(seconds)}
         </span>
-        <span>· max. {formatNumber(pass.maxElevationDeg, 0)}°</span>
+        <span>
+          · max. {maxUncertain ? '≥ ' : ''}
+          {formatNumber(pass.maxElevationDeg, 0)}°
+        </span>
         <span>
           · {formatNumber(pass.aosAzimuthDeg, 0)}° {compassLabel(pass.aosAzimuthDeg)} →{' '}
           {formatNumber(pass.losAzimuthDeg, 0)}° {compassLabel(pass.losAzimuthDeg)}
@@ -140,6 +156,7 @@ export function TelemetryPanel(): React.JSX.Element | null {
   const subPointRef = useRef<HTMLSpanElement | null>(null);
   const lightRef = useRef<HTMLSpanElement | null>(null);
   const countdownRef = useRef<HTMLSpanElement | null>(null);
+  const epochAgeRef = useRef<HTMLSpanElement | null>(null);
 
   useEffect(() => {
     // Die Felder sind dieselben DOM-Knoten wie für das vorige Objekt, und die
@@ -153,11 +170,39 @@ export function TelemetryPanel(): React.JSX.Element | null {
       lightRef.current.textContent = '–';
       lightRef.current.style.color = '';
     }
+    if (epochAgeRef.current) {
+      epochAgeRef.current.textContent = '–';
+      epochAgeRef.current.style.color = '';
+    }
     if (selectedIndex === null || selectedIndex < 0) return;
     let frame = 0;
 
     const update = () => {
       frame = requestAnimationFrame(update);
+
+      // Vor dem Sample-Guard: Die Epoche steckt in den Metadaten, nicht in
+      // der Telemetrie – sie steht schon, bevor der Worker den ersten Tick
+      // für diesen Platz geliefert hat (anders als Elevation & Co. unten).
+      // Frisch aus dem Store gelesen (nicht aus der Closure `meta`): Läuft
+      // für dieselbe ID später ein neuer TLE-Satz ein (CelesTrak-Refresh),
+      // bekommt `selectedMeta` eine neue Epoche, ohne dass dieser Effect neu
+      // aufgesetzt wird (`selectedId` bleibt gleich) – `getState()` liest
+      // trotzdem den aktuellen Stand, ganz ohne React-Rerender.
+      if (epochAgeRef.current) {
+        const epochMs = useAppStore.getState().selectedMeta?.epochMs;
+        if (epochMs === undefined) {
+          epochAgeRef.current.textContent = '–';
+          epochAgeRef.current.style.color = '';
+        } else {
+          const nowMs = virtualNow();
+          const ageHours = (nowMs - epochMs) / 3_600_000;
+          epochAgeRef.current.textContent = formatTleAge(epochMs, nowMs);
+          const severity = tleAgeSeverity(ageHours);
+          epochAgeRef.current.style.color =
+            severity === 'critical' ? 'var(--critical)' : severity === 'warn' ? 'var(--warning)' : '';
+        }
+      }
+
       const sample = readSample(selectedIndex);
       if (!sample) return;
 
@@ -332,6 +377,13 @@ export function TelemetryPanel(): React.JSX.Element | null {
               unit=""
               valueRef={(n) => {
                 subPointRef.current = n;
+              }}
+            />
+            <LiveField
+              label="Bahndaten"
+              unit=""
+              valueRef={(n) => {
+                epochAgeRef.current = n;
               }}
             />
           </div>

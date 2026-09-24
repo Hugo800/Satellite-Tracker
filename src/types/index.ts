@@ -94,6 +94,13 @@ export interface SatelliteMeta {
   inclinationDeg: number;
   /** Helligkeit bei 1000 km und vollem Phasenwinkel. */
   standardMagnitude: number;
+  /**
+   * Epoche des Bahnelementsatzes, ms seit 1970 (aus `satrec.jdsatepoch`,
+   * siehe sgp4.worker.ts). Je weiter die Rechenzeit davon entfernt ist, desto
+   * ungenauer wird die SGP4-Position – Grundlage der Altersanzeige im
+   * Telemetrie-Panel.
+   */
+  epochMs: number;
 }
 
 /** Vorhersage eines Überflugs. */

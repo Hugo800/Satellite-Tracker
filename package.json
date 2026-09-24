@@ -18,8 +18,9 @@
     "verify:viewport": "esbuild scripts/verify-viewport.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/verify-viewport.mjs --log-level=warning && node node_modules/.cache/verify-viewport.mjs",
     "verify:passes": "esbuild scripts/verify-passes.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/verify-passes.mjs --log-level=warning && node node_modules/.cache/verify-passes.mjs",
     "verify:timetravel": "esbuild src/workers/sgp4.worker.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/verify-timetravel-worker.mjs --log-level=warning && esbuild scripts/verify-timetravel.ts --bundle --platform=node --format=esm --jsx=automatic --outfile=node_modules/.cache/verify-timetravel.mjs --log-level=warning && node node_modules/.cache/verify-timetravel.mjs",
+    "verify:tle-age": "esbuild src/workers/sgp4.worker.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/verify-tle-age-worker.mjs --log-level=warning && esbuild scripts/verify-tle-age.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/verify-tle-age.mjs --log-level=warning && node node_modules/.cache/verify-tle-age.mjs",
     "bench:propagation": "esbuild scripts/bench-propagation.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/bench-propagation.mjs --log-level=warning && node node_modules/.cache/bench-propagation.mjs",
-    "test": "npm run typecheck && npm run lint && npm run verify:fastpath && npm run verify:orientation && npm run verify:rig && npm run verify:wiring && npm run verify:selection && npm run verify:viewport && npm run verify:passes && npm run verify:timetravel"
+    "test": "npm run typecheck && npm run lint && npm run verify:fastpath && npm run verify:orientation && npm run verify:rig && npm run verify:wiring && npm run verify:selection && npm run verify:viewport && npm run verify:passes && npm run verify:timetravel && npm run verify:tle-age"
   },
   "dependencies": {
     "@react-three/drei": "^10.1.2",

@@ -162,6 +162,32 @@ function resolveSelectedSlot(): void {
 /* Katalog                                                              */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Julianisches Datum des Unix-Nullpunkts (1970-01-01T00:00:00Z), Standardwert
+ * aus Vallado, „Fundamentals of Astrodynamics and Applications“ – derselbe
+ * Bezug, den `jday`/`invjday` in satellite.js verwenden (siehe
+ * node_modules/satellite.js/lib/ext.js, `jdayInternal`: `1721013.5 +
+ * ((msec/60000+sec/60+minute)/60+hr)/24` liefert für 1970-01-01 00:00:00 UTC
+ * exakt 2440587.5, verifiziert 24.09.2026 per Handrechnung gegen drei TLEs,
+ * s. scripts/verify-tle-age.ts).
+ */
+const JD_UNIX_EPOCH = 2440587.5;
+const MS_PER_DAY = 86_400_000;
+
+/**
+ * Epoche des Bahnelementsatzes als ms seit 1970.
+ *
+ * `satrec.jdsatepoch` ist bei satellite.js 5 (anders als bei manchen anderen
+ * SGP4-Portierungen) das volle julianische Datum inklusive Tagesbruchteil –
+ * es gibt kein separates `jdsatepochF` (node_modules/satellite.js/lib/io.js,
+ * `twoline2satrec`: `satrec.jdsatepoch = jday(year, mon, day, hr, minute,
+ * sec)`, aus `epochyr`/`epochdays` der TLE-Zeile 1). Deshalb genügt eine
+ * einzelne Umrechnung ohne zweiten Summanden.
+ */
+function epochMsFromSatrec(satrec: SatRec): number {
+  return (satrec.jdsatepoch - JD_UNIX_EPOCH) * MS_PER_DAY;
+}
+
 function makeMeta(
   index: number,
   name: string,
@@ -179,6 +205,7 @@ function makeMeta(
     periodMin: meanMotionRadMin > 0 ? (2 * Math.PI) / meanMotionRadMin : 0,
     inclinationDeg: (satrec.inclo * 180) / Math.PI,
     standardMagnitude: standardMagnitudeFor(noradId, group),
+    epochMs: epochMsFromSatrec(satrec),
   };
 }
 
