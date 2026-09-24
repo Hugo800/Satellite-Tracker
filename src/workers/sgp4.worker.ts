@@ -466,11 +466,32 @@ function tick(): number {
  */
 const MAX_DUTY_CYCLE = 0.65;
 
+/**
+ * Obergrenze der Pause nach einem Tick.
+ *
+ * Die Taktdauer misst `performance.now()`, eine monotone Uhr. Sie läuft
+ * weiter, während iOS den Prozess der Seite anhält (App im Hintergrund,
+ * Display aus). Fällt das Anhalten in einen laufenden Tick, zählt die ganze
+ * Pause als Rechenzeit, und die Formel oben verlangt danach noch gut die
+ * Hälfte davon als Wartezeit – nach einer Nacht also Stunden. So lange liefert
+ * der Shard keinen Tick, beantwortet aber weiter Nachrichten. Genau das zeigte
+ * ein iPhone am 24.09.2026: Die Überflugliste kam, die Telemetrie des
+ * gewählten Objekts war 6 h 14 min alt, und Bahnhöhe und Subpunkt blieben
+ * NaN, weil der Pool sie erst im Tick nach der Auswahl rechnet
+ * (scripts/verify-selection.ts, Abschnitte 0 und D).
+ *
+ * Eine Sekunde lässt echte Taktdauern bis gut 1,8 s unberührt. Längere sind
+ * nicht zu erwarten: `npm run bench:propagation` misst für 12 000 Objekte
+ * rund 20 ms auf einem Desktop-Kern, und der Main-Thread kappt die
+ * Interpolationsdauer ohnehin bei 2 s.
+ */
+const MAX_PAUSE_MS = 1000;
+
 function schedule(): void {
   if (!running) return;
   const durationMs = tick();
   const wait = Math.max(baseIntervalMs, durationMs / MAX_DUTY_CYCLE) - durationMs;
-  timer = setTimeout(schedule, Math.max(8, wait));
+  timer = setTimeout(schedule, Math.min(MAX_PAUSE_MS, Math.max(8, wait)));
 }
 
 /* ------------------------------------------------------------------ */
