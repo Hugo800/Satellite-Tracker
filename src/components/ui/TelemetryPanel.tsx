@@ -174,10 +174,23 @@ export function TelemetryPanel(): React.JSX.Element | null {
   // Die Karte wächst vom unteren Rand nach oben. Ohne Grenze schöbe eine
   // lange Überflugliste sie über Kopfzeile und Modus-Leiste; darüber hinaus
   // scrollt sie deshalb in sich selbst.
+  //
+  // Auf Telefonbreite ist sie ein Bottom-Sheet über die volle Breite des
+  // umgebenden Containers (der bereits Safe-Area und Seitenabstand abzieht).
+  // 48dvh (bzw. 58dvh ab `sm`) ist dabei NUR eine grobe Obergrenze für
+  // großzügige Viewports – sie garantiert für sich allein keinen Abstand zur
+  // TopBar: Deren Höhe ist dynamisch (Geo-Fehler, Kompasswarnung,
+  // Ladefehler bleiben teils dauerhaft stehen, ein fehlender Standortzugriff
+  // ist der Normalfall, kein Randfall) und kann auf kleinen Geräten deutlich
+  // über die Hälfte der Bildhöhe hinausgehen. Die eigentliche Begrenzung
+  // liefert deshalb der umgebende Container in Hud.tsx: Er endet erst unter
+  // der tatsächlich gemessenen TopBar-Unterkante (`--hud-top-free`), und
+  // `max-h-full` unten deckelt die Karte zusätzlich auf 100 % davon. Die
+  // dvh-Werte bleiben als zusätzliche, engere Obergrenze für den Normalfall
+  // erhalten (angenehme Kartenhöhe, auch wenn oben viel Platz frei wäre).
   return (
     <div
-      className="material pointer-events-auto flex w-[min(92vw,22.5rem)] flex-col overflow-hidden rounded-[var(--radius-md)]"
-      style={{ maxHeight: 'min(52dvh, 30rem)' }}
+      className="material pointer-events-auto flex w-full max-h-[min(48dvh,26rem,100%)] flex-col overflow-hidden rounded-[var(--radius-md)] sm:w-[min(92vw,22.5rem)] sm:max-h-[min(58dvh,30rem,100%)]"
     >
       <div className="hairline-b flex shrink-0 items-center gap-1 px-3 py-2">
         <Radio size={15} strokeWidth={2.2} className="animate-soft-pulse text-accent" aria-hidden />

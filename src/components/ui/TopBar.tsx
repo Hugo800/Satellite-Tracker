@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { forwardRef, useCallback, useEffect, useRef } from 'react';
 import {
   AlertTriangle,
   Compass,
@@ -76,8 +76,16 @@ function Stat({
   );
 }
 
-/** Kopfzeile: Standort, Sonnen-/Mondstand, Blickrichtung und Moduswahl. */
-export function TopBar(): React.JSX.Element {
+/**
+ * Kopfzeile: Standort, Sonnen-/Mondstand, Blickrichtung und Moduswahl.
+ *
+ * Der `ref` zeigt auf die äußere Hülle, die alle Zeilen umschließt –
+ * Infokarte, Buttonleiste UND die variable Zahl an Hinweiszeilen (Geo-,
+ * Kompass-, Ladefehler). Hud.tsx misst über diesen Knoten die tatsächliche
+ * Unterkante der TopBar per ResizeObserver, um Radar und Telemetrie-Panel
+ * nie darüber wachsen zu lassen.
+ */
+export const TopBar = forwardRef<HTMLDivElement>(function TopBar(_props, ref) {
   const observer = useAppStore((s) => s.observer);
   const sun = useAppStore((s) => s.sun);
   const moon = useAppStore((s) => s.moon);
@@ -156,6 +164,7 @@ export function TopBar(): React.JSX.Element {
 
   return (
     <div
+      ref={ref}
       className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col gap-2.5 p-3"
       style={{
         paddingTop: 'calc(var(--safe-top) + 0.75rem)',
@@ -275,7 +284,7 @@ export function TopBar(): React.JSX.Element {
       ))}
     </div>
   );
-}
+});
 
 function Notice({
   tone,

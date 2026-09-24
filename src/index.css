@@ -191,11 +191,39 @@
 /* Grundlayout                                                           */
 /* -------------------------------------------------------------------- */
 
+/*
+ * `height: 100%` reicht hier nicht: In einer iOS-Standalone-PWA mit
+ * `apple-mobile-web-app-status-bar-style: black-translucent` und
+ * `viewport-fit=cover` zeichnet der Inhalt zwar bis unter die Statusleiste,
+ * aber die Prozenthöhe löst gegen den Layout-Viewport OHNE diesen oberen
+ * Bereich auf – rund 59 pt bei Dynamic-Island-Geräten. Canvas und HUD enden
+ * dadurch entsprechend früh, und am unteren Rand bleibt ein schwarzes Band in
+ * genau dieser Höhe übrig, weil die eigentliche Bildschirmfläche größer ist
+ * als das, was `height: 100%` der Wurzel zugesteht.
+ *
+ * `position: fixed; inset: 0` umgeht das: Die Box wird direkt gegen den
+ * Viewport verankert (oben/unten/links/rechts je 0), unabhängig davon, wie
+ * hoch Safari die Prozenthöhe berechnet. Im normalen Safari-Tab entspricht
+ * das exakt `height: 100%` von vorher (kein Inset vorhanden). In der
+ * Standalone-PWA spannt es sich über die volle Gerätehöhe inklusive des
+ * Statusleistenbereichs, wie es der schwarz-transluzente Stil verspricht. Auf
+ * dem Desktop ändert sich nichts – dort gibt es keine Insets. Scrollen soll
+ * die Seite ohnehin nirgends (siehe `overscroll-behavior` unten, Drawer und
+ * Listen scrollen jeweils in sich selbst), deshalb ist `overflow: hidden`
+ * hier unbedenklich.
+ *
+ * Damit ist nur der Viewport selbst korrekt hoch – reicht der WebGL-Canvas
+ * darunter dennoch nicht bis zum unteren Rand, liegt das an einer separaten
+ * Ursache (veraltete Container-Größe nach langer Zeit im Hintergrund), gegen
+ * die SkyScene.tsx eine eigene Absicherung hat.
+ */
 html,
 body,
 #root {
-  height: 100%;
+  position: fixed;
+  inset: 0;
   margin: 0;
+  overflow: hidden;
   background: #000000;
 }
 

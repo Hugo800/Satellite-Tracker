@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { AdaptiveDpr, Preload } from '@react-three/drei';
 import { CameraRig } from './CameraRig';
@@ -16,6 +17,32 @@ import { TapPicker } from './TapPicker';
  * andere liegt auf konzentrischen Schalen der invertierten Himmelskugel.
  */
 export function SkyScene(): React.JSX.Element {
+  // Absicherung gegen eine veraltete Canvas-Größe nach langer Zeit im
+  // Hintergrund: react-three-fiber misst seinen Container über
+  // react-use-measure (ResizeObserver + `window`-`resize` + `orientation`-
+  // `change`, siehe node_modules/react-use-measure/dist/index.js) – aber
+  // ohne eigenen Listener auf `visibilitychange` oder `pageshow`. Normalerweise
+  // reicht das, weil ResizeObserver jede tatsächliche Größenänderung der Box
+  // meldet, unabhängig davon, ob dafür ein Fenster-Event feuert. Bekannt ist
+  // aber, dass WebKit in einer länger pausierten Standalone-PWA
+  // Layout-/Observer-Callbacks verschleppt, bis wieder etwas anderes einen
+  // Reflow anstößt. Ein synthetisches `resize`-Event kostet fast nichts und
+  // stößt genau den vorhandenen Messpfad erneut an, falls die Größe beim
+  // Aufwachen tatsächlich veraltet war – ob dieser Fall real vorkommt, lässt
+  // sich nur am Gerät prüfen (siehe Bilanz der Aufgabe).
+  useEffect(() => {
+    const kick = () => window.dispatchEvent(new Event('resize'));
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') kick();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('pageshow', kick);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pageshow', kick);
+    };
+  }, []);
+
   return (
     <Canvas
       className="sky-canvas absolute inset-0"
