@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Line } from '@react-three/drei';
 import type { Line2 } from 'three-stdlib';
@@ -58,6 +58,20 @@ export function OrbitTrail(): React.JSX.Element | null {
     return () => window.clearInterval(id);
   }, [selectedId, selectedMeta, showTrails]);
 
+  useLayoutEffect(() => {
+    // Anfangssichtbarkeit *nicht* als `visible`-Prop an <Line> geben (siehe
+    // JSX unten): drei verteilt alle Zusatz-Props über `...rest` sowohl an
+    // das Line2-Objekt als auch an das LineMaterial (node_modules/@react-three/
+    // drei/core/Line.js, zwei `_extends({...}, rest)`-Aufrufe). `visible={false}`
+    // als Prop setzt damit `material.visible` dauerhaft auf false – das später
+    // in useFrame gesetzte `line.visible = true` erzeugt dann nie einen
+    // Draw-Call (gl.info.render.calls bleibt gleich, mit und ohne Linie).
+    // Deshalb hier direkt am Objekt verstecken, bevor der erste Frame steht;
+    // das Material bleibt dabei auf seinem Default (sichtbar).
+    const line = lineRef.current;
+    if (line) line.visible = false;
+  }, []);
+
   useFrame(() => {
     const line = lineRef.current;
     if (!line) return;
@@ -97,7 +111,6 @@ export function OrbitTrail(): React.JSX.Element | null {
       transparent
       opacity={0.85}
       depthWrite={false}
-      visible={false}
       renderOrder={4}
     />
   );
