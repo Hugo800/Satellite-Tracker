@@ -10,7 +10,24 @@
     <meta name="color-scheme" content="light dark" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!--
+      `black` statt `black-translucent`: Mit `black-translucent` und
+      `viewport-fit=cover` zeichnet iOS die installierte App ab der echten
+      Oberkante, macht das Fenster aber um die Statusleiste zu kurz. Unten
+      bleibt ein Streifen ohne Zeichenfläche – auf dem iPhone 17 Pro 62 pt
+      reines Schwarz, gemessen am 24.09.2026. Einen WebKit-Bug, der genau das
+      beschreibt, haben wir nicht gefunden; 301108 ist ähnlich, betrifft aber
+      Safari-Tabs. Mit `black` soll die Seite unter einer schwarzen
+      Statusleiste beginnen und bis zum unteren Rand reichen – am Gerät
+      ungeprüft. Belegt ist das nur für `default`, in einem anderen Projekt
+      (github.com/tpdbf5509/busssss/pull/23); für `black` gibt es nur Apples
+      Doku, laut der der Inhalt bei beiden Stilen unter der Statusleiste liegt.
+      Kosten: Der Himmel scheint nicht mehr hinter der Uhr durch. iOS übernimmt
+      den Stil womöglich erst, wenn die App neu zum Home-Bildschirm hinzugefügt
+      wird. `viewport-fit=cover` bleibt, es liefert die unteren und seitlichen
+      Insets.
+    -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <meta name="apple-mobile-web-app-title" content="Orbital Atlas" />
     <meta
       name="description"

@@ -106,7 +106,16 @@
   --tap: 44px;
 
   --safe-top: env(safe-area-inset-top, 0px);
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  /*
+   * Unterer Inset abzüglich des Streifens, den iOS mit `black-translucent`
+   * unter der Seite stehen lässt (--viewport-shortfall, gesetzt von
+   * src/utils/viewportShortfallWatch.ts, ohne Befund 0). In diesem Zustand
+   * meldet WebKit weiter 34 pt für die Home-Leiste, obwohl die Seite 62 pt
+   * darüber endet und die Leiste ganz im Streifen liegt – das HUD stand
+   * dadurch 34 pt höher als nötig. Herleitung und Belege in
+   * src/utils/viewportShortfall.ts.
+   */
+  --safe-bottom: max(0px, env(safe-area-inset-bottom, 0px) - var(--viewport-shortfall, 0px));
   --safe-left: env(safe-area-inset-left, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
 }
@@ -192,30 +201,28 @@
 /* -------------------------------------------------------------------- */
 
 /*
- * `height: 100%` reicht hier nicht: In einer iOS-Standalone-PWA mit
- * `apple-mobile-web-app-status-bar-style: black-translucent` und
- * `viewport-fit=cover` zeichnet der Inhalt zwar bis unter die Statusleiste,
- * aber die Prozenthöhe löst gegen den Layout-Viewport OHNE diesen oberen
- * Bereich auf – rund 59 pt bei Dynamic-Island-Geräten. Canvas und HUD enden
- * dadurch entsprechend früh, und am unteren Rand bleibt ein schwarzes Band in
- * genau dieser Höhe übrig, weil die eigentliche Bildschirmfläche größer ist
- * als das, was `height: 100%` der Wurzel zugesteht.
+ * Die Wurzel spannt sich per `position: fixed; inset: 0` über den Viewport.
+ * Das ist gleichwertig zu `height: 100%` und bleibt nur deshalb so; das
+ * schwarze Band unter Canvas und HUD behebt es NICHT. Die Annahme aus
+ * beb0f5a, hier löse bloß die Prozenthöhe zu kurz auf, ist durch Messung
+ * widerlegt: Die Bildschirmfotos vor (06:25) und nach (08:55) beb0f5a zeigen
+ * dasselbe Band ab Pixelzeile 2436 – 186 px = 62 pt reines #000000 auf
+ * 874 pt Höhe, exakt der obere Safe-Area-Inset.
  *
- * `position: fixed; inset: 0` umgeht das: Die Box wird direkt gegen den
- * Viewport verankert (oben/unten/links/rechts je 0), unabhängig davon, wie
- * hoch Safari die Prozenthöhe berechnet. Im normalen Safari-Tab entspricht
- * das exakt `height: 100%` von vorher (kein Inset vorhanden). In der
- * Standalone-PWA spannt es sich über die volle Gerätehöhe inklusive des
- * Statusleistenbereichs, wie es der schwarz-transluzente Stil verspricht. Auf
- * dem Desktop ändert sich nichts – dort gibt es keine Insets. Scrollen soll
- * die Seite ohnehin nirgends (siehe `overscroll-behavior` unten, Drawer und
- * Listen scrollen jeweils in sich selbst), deshalb ist `overflow: hidden`
- * hier unbedenklich.
+ * Ursache ist das Fenster selbst: Mit `black-translucent` und
+ * `viewport-fit=cover` zeichnet iOS ab der echten Oberkante, macht das
+ * Fenster aber um die Statusleiste zu kurz. Alles, was
+ * sich am Viewport ausrichtet, endet deshalb 62 pt zu früh, und darunter
+ * liegt keine Zeichenfläche mehr – eine höhere Wurzel füllt den Streifen
+ * nicht, sondern schiebt die unteren Bedienelemente aus dem Bild (Belege in
+ * src/utils/viewportShortfall.ts). Beheben soll das der Statusleistenstil in
+ * index.html – am Gerät ungeprüft; für Installationen, die noch mit dem alten
+ * Stil starten,
+ * gleicht --safe-bottom oben wenigstens den Abstand des HUD an.
  *
- * Damit ist nur der Viewport selbst korrekt hoch – reicht der WebGL-Canvas
- * darunter dennoch nicht bis zum unteren Rand, liegt das an einer separaten
- * Ursache (veraltete Container-Größe nach langer Zeit im Hintergrund), gegen
- * die SkyScene.tsx eine eigene Absicherung hat.
+ * Scrollen soll die Seite ohnehin nirgends (siehe `overscroll-behavior`
+ * unten, Drawer und Listen scrollen jeweils in sich selbst), deshalb ist
+ * `overflow: hidden` hier unbedenklich.
  */
 html,
 body,

@@ -18,18 +18,23 @@ import { TapPicker } from './TapPicker';
  */
 export function SkyScene(): React.JSX.Element {
   // Absicherung gegen eine veraltete Canvas-Größe nach langer Zeit im
-  // Hintergrund: react-three-fiber misst seinen Container über
-  // react-use-measure (ResizeObserver + `window`-`resize` + `orientation`-
-  // `change`, siehe node_modules/react-use-measure/dist/index.js) – aber
-  // ohne eigenen Listener auf `visibilitychange` oder `pageshow`. Normalerweise
-  // reicht das, weil ResizeObserver jede tatsächliche Größenänderung der Box
-  // meldet, unabhängig davon, ob dafür ein Fenster-Event feuert. Bekannt ist
-  // aber, dass WebKit in einer länger pausierten Standalone-PWA
-  // Layout-/Observer-Callbacks verschleppt, bis wieder etwas anderes einen
-  // Reflow anstößt. Ein synthetisches `resize`-Event kostet fast nichts und
-  // stößt genau den vorhandenen Messpfad erneut an, falls die Größe beim
-  // Aufwachen tatsächlich veraltet war – ob dieser Fall real vorkommt, lässt
-  // sich nur am Gerät prüfen (siehe Bilanz der Aufgabe).
+  // Hintergrund – NICHT die Ursache des schwarzen Bands am unteren Rand.
+  // beb0f5a hielt das für eine der beiden möglichen Erklärungen; die
+  // Bildschirmfotos widerlegen es: Auch das Bild von 06:25, nach 6 h im
+  // Hintergrund, zeigt den Canvas bis exakt Pixelzeile 2435 (812 pt), also
+  // genau bis zur Unterkante des zu kurzen Fensters, und keinen Pixel kürzer.
+  // Die Größe war aktuell, nur das Fenster zu klein (siehe index.css und
+  // src/utils/viewportShortfall.ts).
+  //
+  // Die Absicherung bleibt als billige Versicherung für einen Fall, der am
+  // Gerät bisher nicht beobachtet wurde: react-three-fiber misst seinen
+  // Container über react-use-measure (ResizeObserver + `window`-`resize` +
+  // `orientationchange`, siehe node_modules/react-use-measure/dist/index.js),
+  // hört aber weder auf `visibilitychange` noch auf `pageshow`. Verschleppt
+  // WebKit nach langer Pause den Observer-Callback, stößt ein synthetisches
+  // `resize` genau diesen Messpfad erneut an (in Chrome mit erzwungener
+  // veralteter Größe belegt, siehe beb0f5a). Zeigt sich der Fall nie, kann sie
+  // ersatzlos entfallen.
   useEffect(() => {
     const kick = () => window.dispatchEvent(new Event('resize'));
     const onVisibilityChange = () => {
