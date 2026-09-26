@@ -4,10 +4,13 @@ name: CI/CD
 # https://tracker.hugobarthelmess.de: Der Job meldet sich per SSH auf dem OTC-Server an.
 # Der Schlüssel dort ist auf ~/satellite-tracker/deploy.sh beschränkt, das den Commit
 # holt, das Docker-Image neu baut und den Container tauscht.
+# Reine Doku-Änderungen lösen nichts aus (spart Actions-Minuten im privaten Repo).
 on:
   push:
     branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
   pull_request:
+    paths-ignore: ['**.md', 'docs/**']
   workflow_dispatch:
 
 permissions:
