@@ -1,0 +1,62 @@
+name: CI/CD
+
+# Jeder Push und Pull Request wird getestet. Nur ein grüner Push auf main geht live nach
+# https://tracker.hugobarthelmess.de: Der Job meldet sich per SSH auf dem OTC-Server an.
+# Der Schlüssel dort ist auf ~/satellite-tracker/deploy.sh beschränkt, das den Commit
+# holt, das Docker-Image neu baut und den Container tauscht.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck, Lint, verify-Skripte
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  deploy:
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Deployments laufen nacheinander, keiner wird abgebrochen. deploy.sh überspringt
+    # Commits, die älter sind als der Live-Stand.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    environment:
+      name: production
+      url: https://tracker.hugobarthelmess.de
+    steps:
+      - name: Deploy auf den OTC-Server
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 ubuntu@164.30.69.35 "$GITHUB_SHA"
+
+      - name: Seite erreichbar
+        run: curl -fsS -o /dev/null --retry 5 --retry-delay 3 --retry-all-errors https://tracker.hugobarthelmess.de/

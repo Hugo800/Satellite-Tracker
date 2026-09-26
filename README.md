@@ -109,13 +109,18 @@ Blickwinkel und Subpunkt selbst, um pro Satellit und Tick vier Zwischenobjekte z
 sparen. `verify:fastpath` rechnet das über mehrere Bahnfamilien, Standorte und
 Zeitpunkte gegen satellite.js gegen – bei einer Abweichung schlägt es fehl.
 
-## Deployment auf GitHub Pages
+## Deployment
 
-`vite.config.ts` nutzt `base: './'`, die Anwendung läuft damit unter jedem
-Unterpfad ohne Rebuild.
+Live unter <https://tracker.hugobarthelmess.de> (OTC-Server, Docker-Container hinter nginx).
 
-1. Repository → **Settings → Pages → Source: GitHub Actions**
-2. Push auf `main` – `.github/workflows/deploy.yml` baut und veröffentlicht automatisch.
+`.github/workflows/ci.yml` testet jeden Push und Pull Request (`npm test`, `npm run build`).
+Ist ein Push auf `main` grün, meldet sich der Job per SSH auf dem Server an und startet dort
+`~/satellite-tracker/deploy.sh <commit>`: Commit holen, Image neu bauen, Container tauschen.
+Der SSH-Schlüssel (Secret `DEPLOY_SSH_KEY`) darf auf dem Server nur dieses Skript ausführen.
+
+Von Hand auf dem Server: `~/satellite-tracker/deploy.sh main`.
+
+`vite.config.ts` nutzt `base: './'`, die Anwendung läuft damit auch unter einem Unterpfad.
 
 ## Datenquelle
 

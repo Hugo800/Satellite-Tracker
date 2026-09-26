@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
-// Relative base -> funktioniert unter jedem GitHub-Pages-Unterpfad ohne Rebuild.
+// Relative base -> funktioniert unter jedem Unterpfad ohne Rebuild.
 export default defineConfig({
   base: './',
   plugins: [
