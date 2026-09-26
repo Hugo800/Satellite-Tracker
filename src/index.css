@@ -292,17 +292,6 @@ body {
   box-shadow: var(--shadow-2);
 }
 
-/* Auf Retina-Displays entspricht eine echte Haarlinie einem halben Pixel. */
-@media (min-resolution: 2dppx) {
-  .material,
-  .material-strong,
-  .hairline-t,
-  .hairline-b,
-  .hairline-l {
-    border-width: 0.5px;
-  }
-}
-
 .hairline-t {
   border-top: 1px solid var(--separator);
 }
@@ -311,6 +300,29 @@ body {
 }
 .hairline-l {
   border-left: 1px solid var(--separator);
+}
+
+/*
+ * Auf Retina-Displays entspricht eine echte Haarlinie einem halben Pixel.
+ * Bei den Haarlinien nur die eine Seite: Die Tailwind-Preflight gibt jedem
+ * Element `border: 0 solid` in Schriftfarbe, ein `border-width` für alle
+ * Seiten zöge dort einen Rahmen rundum. Nach den Regeln oben, sonst setzten
+ * deren Kurzschreibweisen die Breite wieder auf 1px.
+ */
+@media (min-resolution: 2dppx) {
+  .material,
+  .material-strong {
+    border-width: 0.5px;
+  }
+  .hairline-t {
+    border-top-width: 0.5px;
+  }
+  .hairline-b {
+    border-bottom-width: 0.5px;
+  }
+  .hairline-l {
+    border-left-width: 0.5px;
+  }
 }
 
 /* -------------------------------------------------------------------- */
@@ -516,4 +528,248 @@ body {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+/* -------------------------------------------------------------------- */
+/* Zeitmaschine (TimeMachine.tsx): Aufteilung des Blatts                 */
+/* -------------------------------------------------------------------- */
+
+/*
+ * Hochkant und auf großen Bildschirmen eine Spalte: Kopf mit Uhr, „Jetzt“
+ * und Schließen, darunter der Körper mit Stufen und Regler, der scrollt,
+ * wenn TimeMachine.tsx die Höhe deckelt.
+ */
+.time-sheet {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 22rem;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+}
+
+.time-sheet-head {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.125rem 0.125rem 0.125rem 0.75rem;
+}
+
+.time-sheet-head > :first-child {
+  flex: 1 1 0%;
+}
+
+.time-sheet-body {
+  display: flex;
+  flex: 1 1 0%;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 0;
+  padding: 0.5rem 0.75rem;
+}
+
+/*
+ * Niedriges Querformat (Telefon quer): Untereinander passten Kopf, Stufen
+ * und Regler nicht unter die Kopfzeile der App, der Regler war nur mit
+ * Scrollen erreichbar. Hier stehen drei Spalten nebeneinander – Kopf (Uhr
+ * über „Jetzt“ und Schließen), Stufen in zwei Reihen, Regler –, das Blatt
+ * wird breiter und dafür nur so hoch wie die zwei Stufenreihen samt
+ * Innenabstand. TimeMachine.tsx erkennt die Aufteilung an
+ * `flex-direction: row` und hält dann das ganze Blatt sichtbar.
+ */
+@media (orientation: landscape) and (max-height: 30rem) and (min-width: 34rem) {
+  .time-sheet {
+    flex-direction: row;
+    max-width: 36rem;
+  }
+
+  .time-sheet-head {
+    display: grid;
+    grid-template-columns: auto auto;
+    align-content: center;
+    gap: 0.25rem 0.5rem;
+    padding: 0.5rem 0.25rem 0.5rem 0.75rem;
+    border-bottom-width: 0;
+    border-right: 1px solid var(--separator);
+  }
+
+  .time-sheet-head > :first-child {
+    grid-column: 1 / -1;
+  }
+
+  .time-sheet-body {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .time-sheet-body .time-speeds {
+    flex-shrink: 0;
+    grid-template-columns: repeat(4, 3.25rem);
+  }
+
+  .time-offset {
+    flex: 1 1 0%;
+    min-width: 0;
+  }
+}
+
+/* -------------------------------------------------------------------- */
+/* Zeitmaschine (TimeMachine.tsx): Versatz-Schieberegler                */
+/* -------------------------------------------------------------------- */
+
+/*
+ * Eigene Spur- und Daumen-Gestaltung für den Zeitversatz-Regler. Spur und
+ * Daumen erreicht man nur über browsereigene Pseudo-Elemente
+ * (`::-webkit-slider-*` für Chrome und Safari, `::-moz-range-*` für
+ * Firefox), und die müssen in getrennten Regeln stehen: Chrome und Safari
+ * kennen `::-moz-range-*` nicht und verwürfen eine gemeinsame Selektorliste
+ * ganz.
+ * Das Eingabefeld ist so hoch wie `--tap`, obwohl Spur und Daumen flacher
+ * sind: Der Regler bleibt so über seine ganze Breite in voller Trefferhöhe
+ * antippbar, nicht nur auf dem Daumen.
+ */
+.time-slider {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: var(--tap);
+  background: transparent;
+  /*
+   * Waagerechtes Ziehen bleibt beim Regler, senkrecht scrollt der Körper des
+   * Blatts. Chromium gibt dem inneren Container eines Reglers `pan-y` ohnehin
+   * selbst (per CDP gesehen); ob WebKit das ebenso tut, ist ungeprüft –
+   * deshalb steht es hier ausdrücklich.
+   */
+  touch-action: pan-y;
+}
+
+.time-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--fill);
+}
+
+.time-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 26px;
+  height: 26px;
+  margin-top: -11px;
+  border-radius: 50%;
+  background: var(--thumb);
+  box-shadow: var(--thumb-shadow);
+  border: 1.5px solid var(--accent);
+}
+
+.time-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--fill);
+}
+
+.time-slider::-moz-range-thumb {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--thumb);
+  box-shadow: var(--thumb-shadow);
+  border: 1.5px solid var(--accent);
+}
+
+/*
+ * Fokusring am Daumen statt um das ganze Eingabefeld: Dessen Fläche ist
+ * durchsichtig und viel höher als die sichtbare Spur, ein Ring darum stünde
+ * frei im Blatt.
+ */
+.time-slider:focus-visible {
+  outline: none;
+}
+
+.time-slider:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.time-slider:focus-visible::-moz-range-thumb {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* -------------------------------------------------------------------- */
+/* Zeitmaschine (TimeMachine.tsx): Stufen und „Jetzt“                   */
+/* -------------------------------------------------------------------- */
+
+/*
+ * Eigene Klassen statt `.pill` mit Utilities: `.pill` steht ohne
+ * `@layer` und schlägt damit jede Tailwind-Utility (die liegen in
+ * `@layer utilities`) – `min-h-[var(--tap)]` blieb an einem `.pill`-Knopf
+ * wirkungslos, er blieb bei der Mindesthöhe von `.pill`. Hier setzt die
+ * Klasse die Trefferhöhe selbst.
+ *
+ * Die acht Stufen sind eine Auswahl aus mehreren, deshalb im Stil des
+ * segmentierten Umschalters (`.segmented`, ModeSwitch.tsx): gemeinsame Spur,
+ * die gewählte Stufe als heller „Daumen“. Das trägt auch im Nachtmodus: Sein
+ * Filter (`.night-vision`) macht alles zu Rottönen, übrig bleibt nur der
+ * Helligkeitsunterschied – eine Akzenttönung hebt sich danach deutlich
+ * schwächer vom Grau ab als die helle Daumenfläche der Moduswahl.
+ */
+.time-speeds {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--fill);
+}
+
+.time-speed {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap);
+  border-radius: calc(var(--radius-sm) - 2px);
+  font-size: 13px;
+  font-weight: 590;
+  letter-spacing: -0.01em;
+  color: var(--label-2);
+  transition:
+    background-color var(--t-fast) var(--ease-standard),
+    color var(--t-fast) var(--ease-standard),
+    transform var(--t-fast) var(--ease-spring);
+}
+
+.time-speed:active {
+  transform: scale(0.96);
+}
+
+.time-speed[aria-pressed='true'] {
+  background: var(--thumb);
+  box-shadow: var(--thumb-shadow);
+  color: var(--label);
+}
+
+/*
+ * „Jetzt“ im Kopf des Blatts. Weiß auf dem Systemblau (`--accent`) bliebe in
+ * beiden Erscheinungsbildern unter dem Kontrast, den WCAG für Text dieser
+ * Größe verlangt. #0064d2 ist derselbe Blauton, dunkler, und erreicht ihn
+ * in beiden.
+ */
+.time-now {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: var(--tap);
+  padding: 0 14px;
+  border-radius: 999px;
+  background: #0064d2;
+  color: #ffffff;
+  font-size: 13.5px;
+  font-weight: 600;
+  transition: transform var(--t-fast) var(--ease-spring);
+}
+
+.time-now:active {
+  transform: scale(0.96);
 }
