@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronUp, Crosshair, Eye, EyeOff, Radio, Timer, X } from 'lucide-react';
+import { ChevronDown, ChevronUp, Crosshair, Eye, EyeOff, Info, Radio, Timer, X } from 'lucide-react';
 import { RAD, compassLabel } from '../../math/coords';
 import { readSample, requestFocus } from '../../state/runtime';
 import { selectTimeScale, useAppStore, virtualNow } from '../../state/store';
@@ -13,6 +13,7 @@ import {
   tleAgeSeverity,
 } from '../../utils/format';
 import type { PassPrediction } from '../../types';
+import { SatelliteInfo } from './SatelliteInfo';
 
 function LiveField({
   label,
@@ -147,6 +148,10 @@ export function TelemetryPanel(): React.JSX.Element | null {
   const passPending = useAppStore((s) => s.passPending);
   const select = useAppStore((s) => s.select);
   const [expanded, setExpanded] = useState(true);
+  // Info-Ansicht gilt nur für das Objekt, für das sie geöffnet wurde: Eine
+  // neue Auswahl zeigt wieder die Live-Werte, ohne dass ein Effect zurücksetzt.
+  const [infoFor, setInfoFor] = useState<string | null>(null);
+  const infoOpen = expanded && infoFor !== null && infoFor === selectedId;
 
   const elevationRef = useRef<HTMLSpanElement | null>(null);
   const azimuthRef = useRef<HTMLSpanElement | null>(null);
@@ -286,8 +291,28 @@ export function TelemetryPanel(): React.JSX.Element | null {
       <div className="hairline-b flex shrink-0 items-center gap-1 px-3 py-2">
         <Radio size={15} strokeWidth={2.2} className="animate-soft-pulse text-accent" aria-hidden />
         <div className="ml-1 min-w-0 flex-1">
-          <div className="truncate text-[15px] font-semibold tracking-[-0.01em] text-label">
-            {meta?.name ?? `NORAD ${selectedId}`}
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-[15px] font-semibold tracking-[-0.01em] text-label">
+              {meta?.name ?? `NORAD ${selectedId}`}
+            </span>
+            {/* Sichtbar klein; die Trefferfläche wächst per ::before auf 44 × 44 px,
+                ohne die Zeile höher zu machen. */}
+            <button
+              type="button"
+              aria-label="Allgemeine Infos"
+              aria-pressed={infoOpen}
+              className="relative inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-label-2 transition-colors before:absolute before:-inset-2.5 before:content-[''] aria-pressed:bg-[color-mix(in_srgb,var(--accent)_18%,transparent)] aria-pressed:text-accent"
+              onClick={() => {
+                if (infoOpen) {
+                  setInfoFor(null);
+                } else {
+                  setInfoFor(selectedId);
+                  setExpanded(true);
+                }
+              }}
+            >
+              <Info size={16} strokeWidth={2.2} aria-hidden />
+            </button>
           </div>
           <div className="truncate text-[11px] text-label-2">
             {meta ? (
@@ -334,7 +359,11 @@ export function TelemetryPanel(): React.JSX.Element | null {
         </button>
       </div>
 
-      {expanded && (
+      {infoOpen && (
+        <SatelliteInfo noradId={selectedId} meta={meta} onBack={() => setInfoFor(null)} />
+      )}
+
+      {expanded && !infoOpen && (
         <div className="no-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain px-3 py-2.5">
           <div className="grid grid-cols-3 gap-1.5">
             <LiveField

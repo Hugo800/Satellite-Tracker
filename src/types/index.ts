@@ -92,6 +92,13 @@ export interface SatelliteMeta {
   periodMin: number;
   /** Bahnneigung in Grad. */
   inclinationDeg: number;
+  /** Numerische Exzentrizität der Bahn (0 = Kreis). */
+  eccentricity: number;
+  /**
+   * Internationale Kennung (COSPAR) in der Schreibweise `1998-067A`, aus
+   * Spalte 10–17 der ersten TLE-Zeile; `null`, wenn das Feld leer ist.
+   */
+  cosparId: string | null;
   /** Helligkeit bei 1000 km und vollem Phasenwinkel. */
   standardMagnitude: number;
   /**

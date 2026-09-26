@@ -27,6 +27,7 @@ import {
   HIGHLIGHT_NORAD_IDS,
   TLE_SOURCES,
   normalizeNoradId,
+  parseCosparId,
 } from '../data/tleSources';
 import { geoToObserverGd, normalizeAngle } from '../math/coords';
 import {
@@ -194,6 +195,7 @@ function makeMeta(
   noradId: NoradId,
   group: SatelliteGroup,
   satrec: SatRec,
+  line1: string,
 ): SatelliteMeta {
   const meanMotionRadMin = satrec.no;
   return {
@@ -204,6 +206,8 @@ function makeMeta(
     highlight: HIGHLIGHT_NORAD_IDS.has(noradId),
     periodMin: meanMotionRadMin > 0 ? (2 * Math.PI) / meanMotionRadMin : 0,
     inclinationDeg: (satrec.inclo * 180) / Math.PI,
+    eccentricity: satrec.ecco,
+    cosparId: parseCosparId(line1),
     standardMagnitude: standardMagnitudeFor(noradId, group),
     epochMs: epochMsFromSatrec(satrec),
   };
@@ -264,7 +268,7 @@ function parseTle(text: string, group: SatelliteGroup): SatelliteMeta[] {
       continue;
     }
 
-    const meta = makeMeta(index, name || `NORAD ${noradId}`, noradId, group, satrec);
+    const meta = makeMeta(index, name || `NORAD ${noradId}`, noradId, group, satrec, l1);
     own[slot] = { satrec, meta };
     added.push(meta);
   }

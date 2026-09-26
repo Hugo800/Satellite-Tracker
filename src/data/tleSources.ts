@@ -120,6 +120,21 @@ export function decodeAlpha5(field: string): string {
 }
 
 /**
+ * Internationale Kennung (COSPAR) aus der ersten TLE-Zeile.
+ *
+ * Das Feld (Spalte 10–17) trägt Startjahr zweistellig, laufende Startnummer
+ * und Stück: `98067A` wird `1998-067A`. Zweistellige Jahre ab 57 gehören ins
+ * 20. Jahrhundert – Sputnik startete 1957. Analyseobjekte ohne Kennung haben
+ * ein leeres Feld; dann `null`.
+ */
+export function parseCosparId(line1: string): string | null {
+  const match = /^(\d{2})(\d{3})([A-Z]{1,3})$/.exec(line1.slice(9, 17).trim());
+  if (!match) return null;
+  const yy = Number(match[1]);
+  return `${yy >= 57 ? 1900 + yy : 2000 + yy}-${match[2]}${match[3]}`;
+}
+
+/**
  * Die eine Schreibweise, in der eine NORAD-ID als Identität gilt.
  *
  * Auswahl, Bahnspur und Überflüge hängen an der NORAD-ID. Jede Kennung muss
