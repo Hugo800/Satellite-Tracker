@@ -1,0 +1,12 @@
+# Build-Kontext für den Docker-Build auf dem OTC-Server (Dockerfile liegt dort in ~/satellite-tracker).
+# .git ändert sich bei jedem Pull und würde sonst den Build-Cache brechen.
+.git
+.github
+.claude
+node_modules
+dist
+dist-ssr
+dev-dist
+*.local
+*.tsbuildinfo
+.DS_Store
