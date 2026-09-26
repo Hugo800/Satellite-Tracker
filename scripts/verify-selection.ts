@@ -940,6 +940,25 @@ function findLine(store: RootStore): Line2 | null {
   return line;
 }
 
+/**
+ * Wird die Spur tatsächlich gezeichnet? `line.visible` allein reicht nicht:
+ * drei verteilt Zusatz-Props von `<Line>` über `...rest` auch an das
+ * LineMaterial (node_modules/@react-three/drei/core/Line.js). Ein
+ * `visible`-Prop machte so das Material dauerhaft unsichtbar, und die Spur
+ * erzeugte trotz `line.visible = true` nie einen Draw-Call (OrbitTrail.tsx).
+ */
+function trailDrawn(store: RootStore): boolean {
+  const line = findLine(store);
+  return line?.visible === true && line.material.visible === true;
+}
+
+/** Zustand der Linie für Befundtexte: Objekt und Material getrennt. */
+function trailVisibilityText(store: RootStore): string {
+  const line = findLine(store);
+  if (!line) return 'keine Linie';
+  return `Objekt ${line.visible ? 'sichtbar' : 'verborgen'}, Material ${line.material.visible ? 'sichtbar' : 'verborgen'}`;
+}
+
 let frameTime = 0;
 /** Ein Bild der R3F-Wurzel – OrbitTrail aktualisiert die Linie nur in `useFrame`. */
 function frame(store: RootStore): void {
@@ -1250,7 +1269,9 @@ if (runs('G')) {
       // G3: OrbitTrail selbst zeichnet nur die Spur der gewählten ID – auch
       // wenn trailState (von Hand) die eines anderen Objekts trägt.
       frame(store);
-      const shownBefore = findLine(store)?.visible === true;
+      // Objekt *und* Material müssen sichtbar sein – sonst kein Draw-Call.
+      const shownBefore = trailDrawn(store);
+      const beforeText = trailVisibilityText(store);
       const saved = { noradId: trailState.noradId, points: trailState.points };
       trailState.noradId = LEO.norad as typeof trailState.noradId;
       trailState.points = new Float32Array(saved.points ?? new Float32Array(0));
@@ -1263,9 +1284,9 @@ if (runs('G')) {
       frame(store);
       expect(
         'G3 OrbitTrail verbirgt eine Spur, die nicht zur Auswahl gehört',
-        shownBefore && hiddenForeign && findLine(store)?.visible === true,
-        `vorher ${shownBefore ? 'sichtbar' : 'verborgen'}, mit Spur der ISS ${hiddenForeign ? 'verborgen' : 'sichtbar'}, ` +
-          `danach wieder ${findLine(store)?.visible ? 'sichtbar' : 'verborgen'}`,
+        shownBefore && hiddenForeign && trailDrawn(store),
+        `vorher ${beforeText}, mit Spur der ISS ${hiddenForeign ? 'verborgen' : 'sichtbar'}, ` +
+          `danach wieder ${trailVisibilityText(store)}`,
       );
     },
     { scene: true, setup: { feed: FEED_FULL } },
