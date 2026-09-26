@@ -112,6 +112,7 @@ Zeitpunkte gegen satellite.js gegen – bei einer Abweichung schlägt es fehl.
 ## Deployment
 
 Live unter <https://tracker.hugobarthelmess.de> (OTC-Server, Docker-Container hinter nginx).
+Dockerfile, nginx-Konfiguration und Compose-Datei liegen in `deploy/`.
 
 `.github/workflows/ci.yml` testet jeden Push und Pull Request (`npm test`, `npm run build`).
 Ist ein Push auf `main` grün, meldet sich der Job per SSH auf dem Server an und startet dort
@@ -129,3 +130,9 @@ TLE-Kataloge von [CelesTrak](https://celestrak.org): `stations`, `visual`, `weat
 CelesTrak beantwortet Wiederholungsabrufe innerhalb des zweistündigen Update-Intervalls
 mit HTTP 403 – der Lader-Shard greift dann auf seine eigene CacheStorage-Kopie zurück;
 offline existiert zusätzlich ein Minimal-Fallback.
+
+Im Produktions-Build lädt der Worker zuerst über den eigenen Server (`/tle/gp.php`,
+`deploy/nginx.conf`). Der Server fragt je Gruppe höchstens einmal pro Intervall bei
+CelesTrak an und liefert allen Geräten dieselbe Fassung. So landet keine einzelne IP durch
+wiederholte Abrufe von mehreren Geräten oder Adressen in der 403-Sperre. Scheitert der
+Spiegel, fragt der Worker direkt bei CelesTrak an.

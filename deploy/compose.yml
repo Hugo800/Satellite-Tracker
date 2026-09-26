@@ -1,0 +1,21 @@
+# Orbital Atlas unter https://tracker.hugobarthelmess.de. Davor sitzt der nginx vom web-stack
+# (/opt/web-stack auf dem OTC-Server), der TLS beendet und hierher weiterreicht.
+# Deployt wird per CI (.github/workflows/ci.yml → ~/satellite-tracker/deploy.sh).
+name: satellite-tracker
+services:
+  satellite-tracker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: satellite-tracker
+    restart: unless-stopped
+    volumes:
+      # TLE-Spiegel: übersteht Neubauten, damit nicht jedes Deployment CelesTrak neu abfragt.
+      - tle-cache:/var/cache/nginx/tle
+    networks: [web]
+volumes:
+  tle-cache:
+networks:
+  web:
+    external: true
+    name: web-stack_default

@@ -314,12 +314,47 @@ async function writeCachedTle(url: string, text: string): Promise<void> {
 }
 
 /**
+ * Spiegel auf dem eigenen Server (deploy/nginx.conf, `location = /tle/gp.php`).
+ * CelesTrak sperrt jede IP, die eine Gruppe innerhalb des Update-Intervalls
+ * erneut lädt – auch über verschiedene Geräte und Origins hinweg. Der Spiegel
+ * fragt nur einmal je Gruppe und Intervall an und teilt die Antwort mit allen.
+ * Nur im Produktions-Build: Der Vite-Dev-Server kennt den Pfad nicht und
+ * antwortet mit index.html, und die Node-Prüfskripte haben keinen Origin.
+ */
+const MIRROR_ORIGIN =
+  import.meta.env?.PROD && /^https?:$/.test(self.location?.protocol ?? '') ? self.location.origin : null;
+
+/**
+ * Ein Versuch über den Spiegel. Liefert '' bei jedem Fehlschlag – dann fragt
+ * `fetchTle` wie bisher direkt bei CelesTrak an. Der CacheStorage-Eintrag
+ * bleibt unter der CelesTrak-URL, damit bestehende Fassungen weiter gelten.
+ */
+async function fetchMirroredTle(source: (typeof TLE_SOURCES)[SatelliteGroup]): Promise<string> {
+  if (!MIRROR_ORIGIN) return '';
+  try {
+    const res = await fetch(`${MIRROR_ORIGIN}/tle/gp.php${new URL(source.url).search}`, {
+      signal: AbortSignal.timeout(source.timeoutMs),
+    });
+    if (!res.ok) return '';
+    const text = await res.text();
+    if (!isTleBody(text)) return '';
+    await writeCachedTle(source.url, text);
+    return text;
+  } catch {
+    return '';
+  }
+}
+
+/**
  * CelesTrak beantwortet einen erneuten Abruf innerhalb des 2-Stunden-Update-
  * Intervalls mit HTTP 403 („GP data has not updated…“). Das ist kein Fehler,
  * sondern die Aufforderung, die zuletzt geladene Fassung weiterzuverwenden –
  * deshalb halten wir jede erfolgreiche Antwort selbst in der CacheStorage.
  */
 async function fetchTle(source: (typeof TLE_SOURCES)[SatelliteGroup]): Promise<string> {
+  const mirrored = await fetchMirroredTle(source);
+  if (mirrored) return mirrored;
+
   let lastError = 'unbekannt';
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
