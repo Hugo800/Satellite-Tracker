@@ -143,6 +143,13 @@ export interface PassPrediction {
   illumination: number;
   /** true, wenn der Überflug realistisch mit bloßem Auge zu sehen ist. */
   nakedEye: boolean;
+  /**
+   * Erster und letzter Moment, in dem der Satellit die Bedingung des Filters
+   * „Sichtbar“ erfüllt (auf 1 s genau); `null`, wenn `nakedEye` false ist.
+   * Dazwischen kann er kurz unsichtbar sein (Erdschatten mitten im Bogen).
+   */
+  nakedEyeStart: number | null;
+  nakedEyeEnd: number | null;
 }
 
 /** Topozentrische Position der Sonne am Beobachterstandort. */

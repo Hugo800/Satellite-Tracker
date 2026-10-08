@@ -315,6 +315,9 @@ interface RefLight {
   peakMagnitude: number;
   /** Hellste Magnitude oberhalb der Mindesthöhe für „bloßes Auge“. */
   bestNakedMagnitude: number;
+  /** Erste und letzte Sekunde, in der die Bedingung des Filters „Sichtbar“ gilt. */
+  nakedStart: number | null;
+  nakedEnd: number | null;
 }
 
 function refLight(
@@ -333,6 +336,8 @@ function refLight(
     shadowInsideSec: 0,
     peakMagnitude: 99,
     bestNakedMagnitude: 99,
+    nakedStart: null,
+    nakedEnd: null,
   };
   let previous: boolean | null = null;
   let previousMs = aos;
@@ -358,6 +363,10 @@ function refLight(
       light.peakMagnitude = Math.min(light.peakMagnitude, magnitude);
       if (look.el >= NAKED_EYE_MIN_ELEVATION) {
         light.bestNakedMagnitude = Math.min(light.bestNakedMagnitude, magnitude);
+        if (magnitude <= NAKED_EYE_LIMIT) {
+          if (light.nakedStart === null) light.nakedStart = ms;
+          light.nakedEnd = ms;
+        }
       }
     }
     previous = sunlit;
@@ -402,6 +411,8 @@ const HORIZON_TOL_MS = 1000;
 const TCA_TOL_MS = 10_000;
 /** Die Helligkeitsanalyse tastet in höchstens 15-s-Schritten ab; dazu Sonnenmodell. */
 const LIGHT_STEP_TOL_MS = 15_000 + 3000;
+/** Sichtfenster: Bisektion auf 1 s, Referenz im Sekundentakt, Sonnenmodelle leicht verschieden. */
+const NAKED_EDGE_TOL_MS = 2000;
 
 interface Scenario {
   title: string;
@@ -478,6 +489,8 @@ function compareWithReference(scenario: Scenario, context: Context): void {
   const openBad: string[] = [];
   const lightBad: string[] = [];
   let contiguousChecked = 0;
+  let nakedChecked = 0;
+  let nakedWorst = 0;
 
   for (const [pass, arc] of pairs) {
     const label = utc(pass.aos);
@@ -576,6 +589,28 @@ function compareWithReference(scenario: Scenario, context: Context): void {
       if (light.bestNakedMagnitude >= NAKED_EYE_LIMIT + 0.2 && pass.nakedEye) {
         lightBad.push(`${label} bloßes Auge gemeldet (Referenz ${f(light.bestNakedMagnitude)} mag über 10°)`);
       }
+      // Sichtfenster: Ränder gegen die Referenz im Sekundentakt.
+      if (pass.nakedEye !== (pass.nakedEyeStart !== null && pass.nakedEyeEnd !== null)) {
+        lightBad.push(`${label} Sichtfenster ${pass.nakedEyeStart}–${pass.nakedEyeEnd} passt nicht zu nakedEye=${pass.nakedEye}`);
+      }
+      if (
+        light.bestNakedMagnitude <= NAKED_EYE_LIMIT - 0.2 &&
+        light.nakedStart !== null &&
+        light.nakedEnd !== null &&
+        pass.nakedEyeStart !== null &&
+        pass.nakedEyeEnd !== null
+      ) {
+        const startDelta = Math.abs(pass.nakedEyeStart - light.nakedStart);
+        const endDelta = Math.abs(pass.nakedEyeEnd - light.nakedEnd);
+        nakedWorst = Math.max(nakedWorst, startDelta, endDelta);
+        nakedChecked += 1;
+        if (startDelta > NAKED_EDGE_TOL_MS || endDelta > NAKED_EDGE_TOL_MS) {
+          lightBad.push(
+            `${label} Sichtfenster ${utc(pass.nakedEyeStart)}–${utc(pass.nakedEyeEnd)}, ` +
+              `Referenz ${utc(light.nakedStart)}–${utc(light.nakedEnd)}`,
+          );
+        }
+      }
     }
   }
 
@@ -606,7 +641,10 @@ function compareWithReference(scenario: Scenario, context: Context): void {
   expect(
     'Helligkeit über den ganzen Bogen',
     lightBad.length === 0,
-    lightBad.length ? lightBad.join('; ') : `${pairs.length} Bögen, davon ${contiguousChecked} zusammenhängend beschienen (Dauer = Ende − Anfang)`,
+    lightBad.length
+      ? lightBad.join('; ')
+      : `${pairs.length} Bögen, davon ${contiguousChecked} zusammenhängend beschienen (Dauer = Ende − Anfang); ` +
+          `${nakedChecked} Sichtfenster, Ränder ≤ ${f(nakedWorst / 1000, 1)} s neben der Referenz`,
   );
 }
 

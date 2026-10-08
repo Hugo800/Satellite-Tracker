@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Crosshair, Eye, EyeOff, Info, Radio, Timer, X } from 'lucide-react';
 import { RAD, compassLabel } from '../../math/coords';
+import { passesSkyFilter } from '../../math/visibility';
 import { readSample, requestFocus } from '../../state/runtime';
 import { selectTimeScale, useAppStore, virtualNow } from '../../state/store';
 import {
@@ -51,8 +52,23 @@ function LiveField({
  * Ein laufender Überflug zeigt „läuft“ statt des Datums und einen Rahmen in
  * der Akzentfarbe des Countdowns. Die Angaben bleiben die des ganzen Bogens,
  * auch wenn ein Teil davon schon vorbei ist.
+ *
+ * „bloßes Auge“ heißt: irgendwann in diesem Bogen. Beim laufenden Überflug
+ * sagt das Badge deshalb, ob das *jetzt* gilt – nach derselben Bedingung wie
+ * der Filter „Sichtbar“ –, sonst ab wann oder dass es vorbei ist. Vorher stand
+ * dort „bloßes Auge“, während der Filter den Satelliten (noch) ausblendete.
  */
-function PassRow({ pass, running }: { pass: PassPrediction; running: boolean }): React.JSX.Element {
+function PassRow({
+  pass,
+  running,
+  nakedEyePhase,
+  visibleNow,
+}: {
+  pass: PassPrediction;
+  running: boolean;
+  nakedEyePhase: NakedEyePhase;
+  visibleNow: boolean;
+}): React.JSX.Element {
   const sunlit = pass.sunlitSec > 0 && pass.sunlitStart !== null;
   const startMs = sunlit ? (pass.sunlitStart as number) : pass.aos;
   const endMs = sunlit ? (pass.sunlitEnd as number) : pass.los;
@@ -74,11 +90,26 @@ function PassRow({ pass, running }: { pass: PassPrediction; running: boolean }):
   // nicht ab – dafür also kein Vorbehalt nötig.
   const maxUncertain = pass.losOpen;
 
+  const nakedEyeWindow =
+    pass.nakedEye && pass.nakedEyeStart !== null && pass.nakedEyeEnd !== null
+      ? `${formatClockShort(pass.nakedEyeStart)}–${formatClockShort(pass.nakedEyeEnd)}`
+      : null;
+
   const badge = !sunlit
     ? { text: 'Erdschatten', color: 'var(--label-2)' }
-    : pass.nakedEye
-      ? { text: 'bloßes Auge', color: 'var(--highlight)' }
-      : { text: 'nur optisch', color: 'var(--accent)' };
+    : !pass.nakedEye
+      ? { text: 'nur optisch', color: 'var(--accent)' }
+      : !running
+        ? { text: 'bloßes Auge', color: 'var(--highlight)' }
+        : visibleNow
+          ? { text: 'jetzt sichtbar', color: 'var(--highlight)' }
+          : nakedEyePhase === 'before' && pass.nakedEyeStart !== null
+            ? { text: `bloßes Auge ab ${formatClockShort(pass.nakedEyeStart)}`, color: 'var(--highlight)' }
+            : nakedEyePhase === 'after'
+              ? { text: 'war sichtbar', color: 'var(--label-2)' }
+              : // Im Fenster, aber gerade nicht: Lücke im Erdschatten oder die
+                // Sekunde, in der Szene und Vorhersage am Rand auseinanderliegen.
+                { text: 'bloßes Auge', color: 'var(--highlight)' };
 
   return (
     <li
@@ -127,10 +158,16 @@ function PassRow({ pass, running }: { pass: PassPrediction; running: boolean }):
             {formatNumber(pass.illumination * 100, 0)} % beleuchtet
           </span>
         )}
+        {nakedEyeWindow && (
+          <span style={{ color: 'var(--highlight)' }}>· bloßes Auge {nakedEyeWindow}</span>
+        )}
       </div>
     </li>
   );
 }
+
+/** Wo die (virtuelle) Zeit relativ zum Sichtfenster des laufenden Überflugs steht. */
+type NakedEyePhase = 'before' | 'within' | 'after' | null;
 
 /**
  * Informationskarte des selektierten Objekts.
@@ -152,6 +189,13 @@ export function TelemetryPanel(): React.JSX.Element | null {
   // neue Auswahl zeigt wieder die Live-Werte, ohne dass ein Effect zurücksetzt.
   const [infoFor, setInfoFor] = useState<string | null>(null);
   const infoOpen = expanded && infoFor !== null && infoFor === selectedId;
+  // Live aus der Telemetrie, wie der Filter in der Szene. An die ID gebunden,
+  // damit eine neue Auswahl nicht den Stand der vorigen erbt.
+  const [visibility, setVisibility] = useState<{ id: string | null; visible: boolean }>({
+    id: null,
+    visible: false,
+  });
+  const visibleNow = visibility.id === selectedId && visibility.visible;
 
   const elevationRef = useRef<HTMLSpanElement | null>(null);
   const azimuthRef = useRef<HTMLSpanElement | null>(null);
@@ -181,6 +225,7 @@ export function TelemetryPanel(): React.JSX.Element | null {
     }
     if (selectedIndex === null || selectedIndex < 0) return;
     let frame = 0;
+    let lastVisible: boolean | null = null;
 
     const update = () => {
       frame = requestAnimationFrame(update);
@@ -209,6 +254,17 @@ export function TelemetryPanel(): React.JSX.Element | null {
       }
 
       const sample = readSample(selectedIndex);
+
+      // Dieselbe Bedingung wie der Filter „Sichtbar“ in der Szene. setState
+      // nur beim Wechsel – dazwischen bleibt der Baum re-render-frei.
+      const visible =
+        sample !== null &&
+        passesSkyFilter('nakedEye', false, sample.elevation, sample.eclipsed, sample.magnitude);
+      if (visible !== lastVisible) {
+        lastVisible = visible;
+        setVisibility({ id: selectedId, visible });
+      }
+
       if (!sample) return;
 
       const azimuthDeg = sample.azimuth * RAD;
@@ -245,6 +301,7 @@ export function TelemetryPanel(): React.JSX.Element | null {
   // Aufgang des Überflugs, der gerade läuft. Das ändert sich nur an Auf- und
   // Untergängen – die Liste rendert deshalb nur dann neu, nicht im Sekundentakt.
   const [runningAos, setRunningAos] = useState<number | null>(null);
+  const [nakedEyePhase, setNakedEyePhase] = useState<NakedEyePhase>(null);
   // Countdown und „läuft“ gelten für die Zeit, in der die Szene steht – die
   // virtuelle, nicht die Wanduhr. Im Zeitraffer vergeht zwischen zwei
   // Sekundenschritten ein Vielfaches davon (bei ×60 eine Minute); dann
@@ -253,8 +310,19 @@ export function TelemetryPanel(): React.JSX.Element | null {
   useEffect(() => {
     if (passes.length === 0) return;
     const write = () => {
-      const { runningAos: aos, text } = passCountdown(passes, virtualNow());
+      const nowMs = virtualNow();
+      const { runningAos: aos, text } = passCountdown(passes, nowMs);
       setRunningAos(aos);
+      const running = aos === null ? undefined : passes.find((p) => p.aos === aos);
+      setNakedEyePhase(
+        !running || running.nakedEyeStart === null || running.nakedEyeEnd === null
+          ? null
+          : nowMs < running.nakedEyeStart
+            ? 'before'
+            : nowMs <= running.nakedEyeEnd
+              ? 'within'
+              : 'after',
+      );
       if (countdownRef.current) countdownRef.current.textContent = text;
     };
     write();
@@ -456,7 +524,13 @@ export function TelemetryPanel(): React.JSX.Element | null {
             {!passPending && passes.length > 0 && (
               <ul className="no-scrollbar max-h-56 space-y-1.5 overflow-y-auto overscroll-contain pr-0.5">
                 {passes.map((p) => (
-                  <PassRow key={p.aos} pass={p} running={p.aos === runningAos} />
+                  <PassRow
+                    key={p.aos}
+                    pass={p}
+                    running={p.aos === runningAos}
+                    nakedEyePhase={nakedEyePhase}
+                    visibleNow={visibleNow}
+                  />
                 ))}
               </ul>
             )}

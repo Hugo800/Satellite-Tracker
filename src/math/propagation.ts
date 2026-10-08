@@ -175,6 +175,9 @@ export interface PassOptions {
 /** Abtastschritt innerhalb eines gefundenen Überflugs für die Helligkeitsanalyse. */
 const BRIGHTNESS_STEP_MS = 15_000;
 
+/** Auflösung, auf die Beginn und Ende des Sichtfensters nachgeschärft werden. */
+const NAKED_EYE_REFINE_MS = 1_000;
+
 interface Brightness {
   sunlitStart: number | null;
   sunlitEnd: number | null;
@@ -182,11 +185,78 @@ interface Brightness {
   peakMagnitude: number;
   illumination: number;
   nakedEye: boolean;
+  nakedEyeStart: number | null;
+  nakedEyeEnd: number | null;
+}
+
+interface LightSample {
+  eclipsed: boolean;
+  elevation: number;
+  magnitude: number;
+  phase: number;
+}
+
+/** Beleuchtung und Helligkeit zu einem Zeitpunkt; `null`, wenn SGP4 divergiert. */
+function lightAt(
+  satrec: SatRec,
+  observer: ObserverGd,
+  ms: number,
+  standardMagnitude: number,
+): LightSample | null {
+  const found = lookAt(satrec, ms, observer);
+  if (!found) return null;
+  const date = new Date(ms);
+  const sunUnit = sunEciUnitVector(date);
+  const position = found.position as Vec3;
+  if (isEclipsed(position, sunUnit)) {
+    return { eclipsed: true, elevation: found.look.elevation, magnitude: INVISIBLE_MAGNITUDE, phase: Math.PI };
+  }
+  const phase = phaseAngle(position, observerEciPosition(observer, date), sunUnit);
+  return {
+    eclipsed: false,
+    elevation: found.look.elevation,
+    magnitude: apparentMagnitude(standardMagnitude, found.look.rangeSat, phase, found.look.elevation),
+    phase,
+  };
 }
 
 /**
- * Tastet einen Überflug ab und bestimmt, wann der Satellit sonnenbeschienen ist
- * und wie hell er dabei maximal wird.
+ * Dieselbe Bedingung wie der Himmelsfilter „Sichtbar“ (`passesSkyFilter`):
+ * beschienen, mindestens 10° hoch, nicht schwächer als die Grenzhelligkeit.
+ */
+function isNakedEyeSample(sample: LightSample | null): boolean {
+  return (
+    sample !== null &&
+    !sample.eclipsed &&
+    sample.elevation >= NAKED_EYE_MIN_ELEVATION &&
+    sample.magnitude <= NAKED_EYE_LIMIT
+  );
+}
+
+/**
+ * Bisektion auf den Wechsel der Sichtbarkeit zwischen zwei Abtastungen.
+ * Liefert den Zeitpunkt auf der sichtbaren Seite des Wechsels.
+ */
+function refineNakedEyeEdge(
+  satrec: SatRec,
+  observer: ObserverGd,
+  standardMagnitude: number,
+  visibleMs: number,
+  hiddenMs: number,
+): number {
+  let visible = visibleMs;
+  let hidden = hiddenMs;
+  while (Math.abs(hidden - visible) > NAKED_EYE_REFINE_MS) {
+    const mid = (visible + hidden) / 2;
+    if (isNakedEyeSample(lightAt(satrec, observer, mid, standardMagnitude))) visible = mid;
+    else hidden = mid;
+  }
+  return visible;
+}
+
+/**
+ * Tastet einen Überflug ab und bestimmt, wann der Satellit sonnenbeschienen ist,
+ * wie hell er dabei maximal wird und wann er mit bloßem Auge zu sehen ist.
  */
 function analyseBrightness(
   satrec: SatRec,
@@ -202,6 +272,8 @@ function analyseBrightness(
     peakMagnitude: INVISIBLE_MAGNITUDE,
     illumination: 0,
     nakedEye: false,
+    nakedEyeStart: null,
+    nakedEyeEnd: null,
   };
   if (standardMagnitude === undefined) return empty;
 
@@ -209,19 +281,39 @@ function analyseBrightness(
   const steps = Math.max(2, Math.ceil((los - aos) / BRIGHTNESS_STEP_MS));
   // Zeitpunkt der vorigen Abtastung, falls sie beschienen war – sonst `null`.
   let previousSunlitMs: number | null = null;
+  // Vorige Abtastung überhaupt, für die Ränder des Sichtfensters.
+  let previousMs = aos;
+  let previousNakedEye = false;
 
   for (let i = 0; i <= steps; i += 1) {
     const ms = aos + ((los - aos) * i) / steps;
-    const found = lookAt(satrec, ms, observer);
-    if (!found) {
-      previousSunlitMs = null;
-      continue;
-    }
+    const sample = lightAt(satrec, observer, ms, standardMagnitude);
 
-    const date = new Date(ms);
-    const sunUnit = sunEciUnitVector(date);
-    const position = found.position as Vec3;
-    if (isEclipsed(position, sunUnit)) {
+    // Sichtfenster: vom ersten bis zum letzten Moment, in dem der Satellit die
+    // Bedingung des Filters „Sichtbar“ erfüllt – beide Ränder per Bisektion auf
+    // eine Sekunde genau, damit das Panel zur selben Zeit umschaltet wie der
+    // Filter in der Szene. Eine Lücke dazwischen (Erdschatten mitten im Bogen)
+    // bleibt im Fenster; das Panel prüft „jetzt sichtbar“ deshalb live.
+    const nakedEye = isNakedEyeSample(sample);
+    if (nakedEye && !previousNakedEye) {
+      const start = i > 0 ? refineNakedEyeEdge(satrec, observer, standardMagnitude, ms, previousMs) : ms;
+      if (result.nakedEyeStart === null) result.nakedEyeStart = start;
+    }
+    if (!nakedEye && previousNakedEye) {
+      result.nakedEyeEnd = refineNakedEyeEdge(satrec, observer, standardMagnitude, previousMs, ms);
+    }
+    // Bloßes Auge gilt für den gesamten Bogen, nicht nur für das
+    // Helligkeitsmaximum: Der hellste Moment kann horizontnah liegen und dort
+    // an der Mindesthöhe scheitern, während das Objekt kurz darauf hoch am
+    // Himmel steht – minimal schwächer, aber klar zu sehen.
+    if (nakedEye) {
+      result.nakedEye = true;
+      result.nakedEyeEnd = ms;
+    }
+    previousNakedEye = nakedEye;
+    previousMs = ms;
+
+    if (!sample || sample.eclipsed) {
       previousSunlitMs = null;
       continue;
     }
@@ -243,25 +335,9 @@ function analyseBrightness(
     if (previousSunlitMs !== null) result.sunlitSec += (ms - previousSunlitMs) / 1000;
     previousSunlitMs = ms;
 
-    const phase = phaseAngle(position, observerEciPosition(observer, date), sunUnit);
-    const magnitude = apparentMagnitude(
-      standardMagnitude,
-      found.look.rangeSat,
-      phase,
-      found.look.elevation,
-    );
-
-    // Bloßes Auge gilt für den gesamten Bogen, nicht nur für das
-    // Helligkeitsmaximum: Der hellste Moment kann horizontnah liegen und dort
-    // an der Mindesthöhe scheitern, während das Objekt kurz darauf hoch am
-    // Himmel steht – minimal schwächer, aber klar zu sehen.
-    if (magnitude <= NAKED_EYE_LIMIT && found.look.elevation >= NAKED_EYE_MIN_ELEVATION) {
-      result.nakedEye = true;
-    }
-
-    if (magnitude < result.peakMagnitude) {
-      result.peakMagnitude = magnitude;
-      result.illumination = illuminatedFraction(phase);
+    if (sample.magnitude < result.peakMagnitude) {
+      result.peakMagnitude = sample.magnitude;
+      result.illumination = illuminatedFraction(sample.phase);
     }
   }
 
