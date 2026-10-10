@@ -1,5 +1,6 @@
 import { Quaternion, Vector3 } from 'three';
-import type { NoradId, SatelliteMeta } from '../types';
+import { FORECAST_DEFAULT_WINDOW_MIN, FORECAST_MAX_SLOTS } from '../data/forecast';
+import type { ForecastEntry, NoradId, SatelliteMeta, WorkerResponse } from '../types';
 import {
   TELEMETRY_STRIDE,
   T_ALT,
@@ -261,6 +262,218 @@ export function requestFocus(azimuth: number, elevation: number): void {
   viewState.focus = { azimuth, elevation, startedAt: performance.now() };
 }
 
+/* ------------------------------------------------------------------ */
+/* Vorhersage „Demnächst sichtbar“                                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Vorhersagestand und abgeleitete Anzeige liegen wie `trailState` außerhalb
+ * von React: Der Controller (useVisibilityForecast) prüft alle 250 ms
+ * Wanduhr gegen die virtuelle Zeit, Countdowns ändern sich in jedem Takt, die
+ * Spurköpfe in jedem Bild. Im Store löste das je Takt ein Rendern aller
+ * Abonnenten aus. React rendert nur, wenn sich die Menge der Einträge ändert
+ * (`forecastView.membershipVersion` → `forecastRevision` im Store);
+ * VisibilityForecast, RadarMap, TapPicker und die Refs der Liste lesen direkt hier.
+ */
+
+/** Teilantwort eines Shards. */
+export type ForecastPart = Extract<WorkerResponse, { type: 'forecast' }>;
+
+/** Freigegebener Stand des Kurz-Scans (`near`), zusammengeführt aus allen Shards. */
+export interface ForecastCommitted {
+  requestId: number;
+  fromMs: number;
+  toMs: number;
+  /** Minimum über die Shards: bis hierhin fehlt kein Fenster (mehr als `keep` Treffer kürzen die Liste). */
+  completeUntilMs: number;
+  /** Sortiert nach (startMs, noradId). */
+  entries: ForecastEntry[];
+  /** alle Shards haben geliefert */
+  complete: boolean;
+}
+
+/** Laufende Anfrage einer Art; die Teile sammeln sich je Shard, bis alle geliefert haben. */
+export interface ForecastPending {
+  requestId: number;
+  fromMs: number;
+  toMs: number;
+  parts: Map<number, ForecastPart>;
+  /** performance.now() beim Senden – Grundlage des Wachhunds. */
+  sentAt: number;
+}
+
+/** Stand des Lang-Scans: frühester Sichtbeginn über alle Shards in [fromMs, toMs], oder null, wenn dort keiner liegt. */
+export interface ForecastFarCommitted {
+  requestId: number;
+  fromMs: number;
+  toMs: number;
+  entry: ForecastEntry | null;
+  /** alle Shards haben geliefert */
+  complete: boolean;
+}
+
+/**
+ * Anfragen und Stände beider Scan-Arten.
+ *
+ * Der Lang-Scan („Ausblick“, `kind 'far'`) hat einen eigenen Zustand – eigene
+ * `pending`-/`committed`-Plätze, eigener Mindestabstand, eigenes Dirty-Flag –,
+ * damit er die Kurz-Vorhersage nie blockiert oder verdrängt: Eine laufende
+ * Lang-Anfrage hält keine Kurz-Anfrage auf und umgekehrt. Geschrieben wird
+ * nur vom Pool (`engine.requestForecast`, Antworten in `handle`) und vom
+ * Controller-Hook.
+ */
+export const forecastState: {
+  /** Ein Zähler für beide Arten; die Zuordnung läuft über `kind`, nicht über Nummernkreise. */
+  nextRequestId: number;
+  pending: ForecastPending | null;
+  committed: ForecastCommitted | null;
+  /** performance.now(), −Infinity anfangs. */
+  lastRequestAt: number;
+  /** Vom Controller nach `catalogVersion` (entprellt) gesetzt → erzwingt Neuscan. */
+  catalogDirty: boolean;
+  // Lang-Scan („Ausblick“, kind 'far') – eigener Zustand, damit er die Kurz-Vorhersage nie blockiert oder verdrängt
+  farPending: ForecastPending | null;
+  farCommitted: ForecastFarCommitted | null;
+  /** performance.now(), −Infinity anfangs. */
+  lastFarRequestAt: number;
+  /** Wie `catalogDirty`, für den Lang-Scan. */
+  farDirty: boolean;
+} = {
+  nextRequestId: 1,
+  pending: null,
+  committed: null,
+  lastRequestAt: -Infinity,
+  catalogDirty: false,
+  farPending: null,
+  farCommitted: null,
+  lastFarRequestAt: -Infinity,
+  farDirty: false,
+};
+
+/**
+ * `off`: Filter nicht „Sichtbar“. `noObserver`: noch kein Standort.
+ * `paused`: |Zeitraffer| > FORECAST_MAX_ABS_SCALE. `pending`: kein gültiger
+ * Stand für die laufende Zeit. `ready`: Einträge gelten.
+ */
+export type ForecastStatus = 'off' | 'noObserver' | 'paused' | 'pending' | 'ready';
+/** 'idle' = Lang-Scan ruht (Liste nicht leer, Vorhersage nicht 'ready' oder pausiert); sonst wie ForecastStatus. */
+export type ForecastFarStatus = 'idle' | 'pending' | 'ready';
+
+/**
+ * Ein Eintrag der Anzeige – Texte fertig abgeleitet, Komponenten kopieren nur.
+ * Steht für einen Verbund (§13: Objekte mit praktisch derselben Spur, etwa die
+ * ISS mit ihren Modulen); ID, Name, Fenster und Spur sind die des Anführers,
+ * Antippen wählt ihn.
+ */
+export interface ForecastSlot {
+  /** Anführer des Verbunds */
+  noradId: NoradId;
+  name: string;
+  highlight: boolean;
+  /** Fenster und Spur des Anführers */
+  entry: ForecastEntry;
+  /** Die übrigen Objekte des Verbunds, ohne Anführer; leer für ein einzelnes Objekt. */
+  memberIds: readonly NoradId[];
+  /** '' | '+5' – Zahl der übrigen Objekte */
+  groupText: string;
+  /** startMs ≤ now < endMs */
+  visibleNow: boolean;
+  /** 'in 3:20' | 'noch 4:10' | 'sichtbar' */
+  countdownText: string;
+  /**
+   * `${name} · ${countdownText}`, im Verbund `${name} +5 · ${countdownText}`;
+   * Highlight-Objekte ab dem Aufgang (`traceStartMs`) ohne Namen – dann steht
+   * ihr Namenslabel (HighlightMarkers) schon am Himmel: `${countdownText}` bzw.
+   * `+5 · ${countdownText}`
+   */
+  labelText: string;
+  /** `aus ${compassLabel(startAzimuthDeg)} · max ${Math.round(maxElevationDeg)}°` */
+  detailText: string;
+}
+
+/** Kandidat der Ausblick-Zeile – nur in der Liste, nie am Himmel oder im Radar. */
+export interface ForecastNext {
+  noradId: NoradId;
+  name: string;
+  highlight: boolean;
+  entry: ForecastEntry;
+  /** `Nächster: ${name}` */
+  text: string;
+  /** `${formatForecastNext(startMs, now)} · aus ${compassLabel(startAzimuthDeg)}` */
+  detailText: string;
+}
+
+/**
+ * Abgeleitete Anzeige. Entsteht an genau einer Stelle,
+ * `deriveForecastView(…, virtualNow(), …)` (src/state/forecastView.ts), im
+ * Takt des Controllers. Alle Texte rechnen damit gegen die virtuelle Zeit;
+ * keine Komponente formatiert selbst einen Countdown.
+ */
+export interface ForecastView {
+  status: ForecastStatus;
+  statusText: string;
+  windowMs: number;
+  /** Virtuelle Zeit der letzten Ableitung. */
+  nowMs: number;
+  scale: number;
+  /** ≤ FORECAST_MAX_SLOTS Verbünde, sortiert */
+  slots: ForecastSlot[];
+  farStatus: ForecastFarStatus;
+  /** '' | 'Suche bis 90 min …' | 'Auch bis 90 min keiner' | next.text */
+  nextText: string;
+  /** nur bei farStatus 'ready' mit Kandidat und leerer Liste */
+  next: ForecastNext | null;
+  /**
+   * steigt bei Änderung von status, farStatus, der geordneten ID-Liste, einer
+   * Verbundgröße (`groupText`) oder next?.noradId – und des Zustandstexts, den
+   * die Liste per React rendert; nie bei bloßem Countdown-Wechsel
+   */
+  membershipVersion: number;
+  /** steigt bei jeder Änderung (auch nur Texte) */
+  version: number;
+}
+
+export const forecastView: ForecastView = {
+  status: 'off',
+  statusText: '',
+  windowMs: FORECAST_DEFAULT_WINDOW_MIN * 60_000,
+  nowMs: 0,
+  scale: 1,
+  slots: [],
+  farStatus: 'idle',
+  nextText: '',
+  next: null,
+  membershipVersion: 0,
+  version: 0,
+};
+
+/**
+ * Was VisibilityForecast im letzten Bild als Label gezeigt hat, je Platz
+ * (Index wie `forecastView.slots`): Mitte des Sprites in Weltkoordinaten,
+ * halbe Breite und Höhe des bemalten Texts in Szeneneinheiten, und ob es zu
+ * sehen war (Kollisionsregel, Status). TapPicker prüft einen Tap gegen genau
+ * diese Fläche – nicht gegen den Kopf der Spur: Das Label sitzt 12 Einheiten
+ * darüber (Highlight-Objekte 16 darunter), und ein langes Label reicht 5–6°
+ * zur Seite. Als Kreis um den Kopf mit 4° · FOV/70 war der Countdown-Teil
+ * eines Labels nie antippbar, gezoomt nicht einmal die Mitte (nachgerechnet
+ * 08.10.2026). Geschrieben nur von der Bildfunktion, ohne Allokation.
+ */
+export const forecastLabels: {
+  noradIds: NoradId[];
+  /** 1 = im letzten Bild gezeigt. */
+  visible: Uint8Array;
+  /** xyz je Platz. */
+  centers: Float32Array;
+  halfWidths: Float32Array;
+  halfHeights: Float32Array;
+} = {
+  noradIds: [],
+  visible: new Uint8Array(FORECAST_MAX_SLOTS),
+  centers: new Float32Array(FORECAST_MAX_SLOTS * 3),
+  halfWidths: new Float32Array(FORECAST_MAX_SLOTS),
+  halfHeights: new Float32Array(FORECAST_MAX_SLOTS),
+};
+
 /**
  * Diagnosefenster für die Entwicklung.
  *
@@ -273,5 +486,8 @@ if (import.meta.env?.DEV) {
     telemetry,
     catalogIndex,
     readSample,
+    forecastState,
+    forecastView,
+    forecastLabels,
   };
 }

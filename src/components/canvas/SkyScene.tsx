@@ -11,6 +11,7 @@ import { SatelliteTrails } from './SatelliteTrails';
 import { SkyDome } from './SkyDome';
 import { Starfield } from './Starfield';
 import { TapPicker } from './TapPicker';
+import { VisibilityForecast } from './VisibilityForecast';
 
 /**
  * Wurzel der 3D-Szene. Die Kamera sitzt exakt im Ursprung (0, 0, 0) – alles
@@ -70,6 +71,7 @@ export function SkyScene(): React.JSX.Element {
       <SatelliteField />
       <HighlightMarkers />
       <OrbitTrail />
+      <VisibilityForecast />
       <CameraRig />
       <TapPicker />
       <AdaptiveDpr pixelated />

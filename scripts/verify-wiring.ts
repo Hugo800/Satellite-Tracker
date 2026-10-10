@@ -7,6 +7,11 @@
  * tatsächlich gezeichnet würde: Objekt *und* Material sichtbar, gelesen in
  * dem Moment, in dem R3F `gl.render` aufruft (Abschnitt C).
  *
+ * Dieselbe Prüfung für die Spuren der Vorhersage „Demnächst sichtbar“
+ * (VisibilityForecast, 20 drei-<Line> ohne `visible`-Prop) steht nicht hier,
+ * sondern in scripts/verify-forecast.ts, Abschnitt F – dort mit echten
+ * Einträgen aus dem Scan, siehe der Verweis am Ende von Abschnitt C.
+ *
  * Dafür laufen die echten Komponenten im echten Renderer von React Three Fiber
  * (`createRoot`, `frameloop: 'never'`, Bilder per `advance`), mit dem echten
  * <OrbitControls> aus drei. WebGL braucht das nicht: R3F nimmt als Renderer
@@ -596,6 +601,18 @@ console.log('C. OrbitTrail: Objekt und Material der Bahnspur beim Zeichnen sicht
       `${drawn(reselected).length} von ${reselected.length} gezeichnet`,
   );
 }
+
+/* --- D. VisibilityForecast: Verweis --- */
+// Die Vorhersagespuren haben dieselbe Falle: VisibilityForecast hängt je
+// Platz zwei drei-<Line> ein und darf ihnen kein `visible`-Prop geben (sonst
+// bliebe `material.visible` dauerhaft false). Geprüft wird das vollständig in
+// scripts/verify-forecast.ts, Abschnitt F, mit demselben Haken an
+// `gl.render`: Nach einem Wechsel von `forecastView.version` mit zwei
+// Einträgen zeichnen 4 Line2 mit sichtbarem Objekt und Material und
+// `instanceCount > 0`, nie die Platzhalter im Nadir; `showTrails` aus →
+// Linien unsichtbar, Labels sichtbar. Hier nicht doppelt – die Einträge dort
+// stammen aus dem echten Scan, eine zweite Fassung mit erfundenen Punkten
+// prüfte weniger.
 
 console.log(`${checks} Prüfungen, ${failures} Fehlschläge`);
 if (failures > 0) process.exit(1);

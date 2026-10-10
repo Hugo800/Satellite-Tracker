@@ -1,9 +1,19 @@
 import { useEffect, useRef } from 'react';
 import { GROUP_LOAD_ORDER } from '../data/tleSources';
+import { FORECAST_FAR_KEEP, FORECAST_KEEP_PER_SHARD } from '../math/forecast';
 import { TELEMETRY_STRIDE, T_EL, T_RANGE } from '../math/telemetryLayout';
-import { catalogIndex, ensureTelemetryCapacity, telemetry, trailState } from '../state/runtime';
+import { mergeFarParts, mergeForecastParts } from '../state/forecastView';
+import {
+  catalogIndex,
+  ensureTelemetryCapacity,
+  forecastState,
+  telemetry,
+  trailState,
+} from '../state/runtime';
+import type { ForecastPending } from '../state/runtime';
 import { isRealtime, selectTimeEpoch, useAppStore, virtualNow, virtualTimeAt } from '../state/store';
 import type {
+  ForecastKind,
   NoradId,
   SatelliteGroup,
   SatelliteMeta,
@@ -151,6 +161,55 @@ export const engine = {
   },
   requestPass(noradId: NoradId, searchHours = 48): boolean {
     return sendForId(noradId, { type: 'pass', noradId, searchHours });
+  },
+  /**
+   * Vorhersage „Demnächst sichtbar“ über den ganzen Katalog: Rundruf an alle
+   * Shards, jeder scannt seine eigenen Objekte im Bereich `[fromMs, toMs]`
+   * (virtuelle Zeit, absolut) und beschreibt seine `keep` frühesten Fenster.
+   *
+   * Die Anfrage belegt den Platz ihrer Art in `forecastState` (`pending` für
+   * `near`, `farPending` für `far`) und ersetzt dort eine laufende derselben
+   * Art; deren Antworten fallen dann an der `requestId` (`handle` unten). Die
+   * andere Art bleibt unberührt – auch im Worker, der je Art einen Job hält.
+   * Freigegeben wird ein Stand erst, wenn jeder Shard geliefert hat; einen
+   * hängenden Shard fängt der Wachhund des Controllers (useVisibilityForecast).
+   *
+   * @returns die `requestId`, oder −1 ohne Pool.
+   */
+  requestForecast(
+    kind: ForecastKind,
+    fromMs: number,
+    toMs: number,
+    keep: number = kind === 'near' ? FORECAST_KEEP_PER_SHARD : FORECAST_FAR_KEEP,
+  ): number {
+    assertFinite('fromMs', fromMs);
+    assertFinite('toMs', toMs);
+    if (!pool) return -1;
+    const requestId = forecastState.nextRequestId;
+    forecastState.nextRequestId += 1;
+    const sentAt = performance.now();
+    const pending: ForecastPending = { requestId, fromMs, toMs, parts: new Map(), sentAt };
+    if (kind === 'near') {
+      forecastState.pending = pending;
+      forecastState.lastRequestAt = sentAt;
+    } else {
+      forecastState.farPending = pending;
+      forecastState.lastFarRequestAt = sentAt;
+    }
+    broadcast({ type: 'forecast', kind, requestId, fromMs, toMs, keep });
+    return requestId;
+  },
+  /**
+   * Bricht die Vorhersage ab – nur die Art `kind`, ohne Angabe beide. Die
+   * Shards geben ihre Scheiben frei, der Platz in `forecastState` wird leer;
+   * eine Antwort, die schon unterwegs ist, fällt an der `requestId`. Der
+   * freigegebene Stand (`committed`/`farCommitted`) bleibt – über ihn
+   * entscheidet der Controller.
+   */
+  cancelForecast(kind?: ForecastKind): void {
+    broadcast(kind === undefined ? { type: 'forecastCancel' } : { type: 'forecastCancel', kind });
+    if (kind !== 'far') forecastState.pending = null;
+    if (kind !== 'near') forecastState.farPending = null;
   },
   /**
    * Geschwindigkeit der virtuellen Zeit: 1 = Echtzeit, 60 = eine Minute je
@@ -544,6 +603,44 @@ export function useSatelliteEngine({ intervalMs = 100 }: EngineOptions = {}): vo
           setPasses(msg.noradId, msg.passes, msg.epoch, msg.fromMs);
           break;
 
+        case 'forecast': {
+          // Die Art bestimmt den Platz, die `requestId` die Anfrage: Eine
+          // Antwort zu einer ersetzten, abgebrochenen oder vom Wachhund
+          // aufgegebenen Anfrage wird verworfen. Gezählt wird je Shard, ein
+          // Shard kann also nicht doppelt beitragen. Verifiziert 08.10.2026
+          // (2 Node-Shards, Antwort von Shard 1 zurückgehalten): fremde
+          // `requestId` und Antwort der falschen Art ändern nichts, ohne
+          // Shard 1 bleibt `committed` leer, mit ihm steht er vollständig.
+          const near = msg.kind === 'near';
+          const slot = near ? forecastState.pending : forecastState.farPending;
+          if (!slot || msg.requestId !== slot.requestId) break;
+          slot.parts.set(shard, msg);
+          // Erst mit allen Shards ein Stand – sonst fehlten Fenster, die ein
+          // noch rechnender Shard liefern wird.
+          if (slot.parts.size < state.shardCount) break;
+          const parts = [...slot.parts.values()];
+          if (near) {
+            forecastState.committed = mergeForecastParts(
+              parts,
+              state.shardCount,
+              slot.requestId,
+              slot.fromMs,
+              slot.toMs,
+            );
+            forecastState.pending = null;
+          } else {
+            forecastState.farCommitted = mergeFarParts(
+              parts,
+              state.shardCount,
+              slot.requestId,
+              slot.fromMs,
+              slot.toMs,
+            );
+            forecastState.farPending = null;
+          }
+          break;
+        }
+
         case 'error':
           pushError(msg.message);
           break;
@@ -595,6 +692,11 @@ export function useSatelliteEngine({ intervalMs = 100 }: EngineOptions = {}): vo
       }
       for (const worker of workers) worker.terminate();
       pool = null;
+      // Laufende Vorhersage-Anfragen bekommen keine Antwort mehr. Die
+      // freigegebenen Stände bleiben: Sie hängen an NORAD-IDs, nicht an
+      // Plätzen, und der neue Pool löst über `catalogVersion` einen Neuscan aus.
+      forecastState.pending = null;
+      forecastState.farPending = null;
       started.current = false;
       telemetry.count = 0;
       telemetry.capacity = 0;

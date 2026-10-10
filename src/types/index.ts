@@ -152,6 +152,55 @@ export interface PassPrediction {
   nakedEyeEnd: number | null;
 }
 
+/**
+ * Ein Sichtfenster eines Objekts samt Spur. Alle Zeiten absolut (ms seit 1970, virtuelle Zeit).
+ *
+ * Entsteht im Shard (`describeWindow` in src/math/forecast.ts) und hängt an
+ * der NORAD-ID, nicht am Platz – ein neu aufgebauter Pool vergibt die Plätze
+ * anders. Weil die Zeiten absolut sind, bleibt ein Eintrag bei reiner
+ * Geschwindigkeitsänderung gültig; ob er die laufende Zeit noch abdeckt,
+ * entscheidet allein der Main-Thread (src/state/forecastView.ts).
+ */
+export interface ForecastEntry {
+  noradId: NoradId;
+  /**
+   * Beginn der Spur: Aufgang des Bogens, zu dem das Fenster gehört (Höhe 0,
+   * auf 250 ms), oder fromMs, wenn das Objekt von dort bis zum Sichtbeginn
+   * durchgehend über dem Horizont steht – bei einem schon laufenden Fenster
+   * also nach `startMs`.
+   */
+  traceStartMs: number;
+  /**
+   * Sichtbeginn (sichtbare Seite, ±250 ms) – auch vor fromMs, wenn das
+   * Fenster dort schon läuft (bis FORECAST_MAX_VISIBLE_MS zurück gesucht);
+   * = fromMs der Anfrage, wenn startOpen.
+   */
+  startMs: number;
+  /** Lief schon länger als FORECAST_MAX_VISIBLE_MS vor fromMs – Beginn unbekannt. */
+  startOpen: boolean;
+  /** Letzter sichtbarer Moment (±250 ms); = max(startMs, fromMs) + FORECAST_MAX_VISIBLE_MS, wenn endOpen. */
+  endMs: number;
+  endOpen: boolean;
+  /** Abstand der Spurpunkte in ms (≥ 5000, so gewählt, dass ≤ FORECAST_TRACE_MAX_POINTS Punkte entstehen). */
+  stepMs: number;
+  /** Einheitsvektoren xyz (Konvention wie buildTrail: x Ost, y Zenit, −z Nord) ab traceStartMs; letzter Punkt ≥ endMs. */
+  points: Float32Array;
+  peakMagnitude: number;
+  maxElevationDeg: number;
+  /** Azimut (Grad) zum Sichtbeginn – für „aus NW“. */
+  startAzimuthDeg: number;
+}
+
+/**
+ * Art des Scans. `near` = Kurz-Vorhersage für die Liste (Fenster W + Vorlauf,
+ * bis 20 Fenster je Shard). `far` = Lang-Scan („Ausblick“) bei leerer Liste:
+ * nur das früheste Fenster je Shard, läuft im Worker mit Nachrang hinter
+ * Tick und `near`. Beide Arten haben im Worker je einen eigenen Job und im
+ * Main-Thread je einen eigenen Zustand; ein `near` verdrängt nie ein `far`
+ * und umgekehrt – nur ein neuer Scan derselben Art ersetzt den laufenden.
+ */
+export type ForecastKind = 'near' | 'far';
+
 /** Topozentrische Position der Sonne am Beobachterstandort. */
 export interface SunState {
   altitudeDeg: number;
@@ -252,7 +301,19 @@ export type WorkerRequest =
   /** Rohtext einer Gruppe, vom Lader-Shard über den Main-Thread verteilt. */
   | { type: 'tle'; group: SatelliteGroup; text: string }
   | { type: 'trail'; noradId: NoradId; fromMin: number; toMin: number; samples: number }
-  | { type: 'pass'; noradId: NoradId; searchHours: number };
+  | { type: 'pass'; noradId: NoradId; searchHours: number }
+  /**
+   * Sichtfenster im Bereich `[fromMs, toMs]` über die eigenen Objekte des
+   * Shards, höchstens `keep` beschrieben.
+   *
+   * Absolute Zeiten statt einer Epoche: Das Ergebnis ist eine reine Funktion
+   * aus Katalog, Standort und Zeitbereich. Der Worker liest dafür nie seine
+   * eigene Uhr – kein Rennen mit `time`-Nachrichten; ob ein Stand noch gilt,
+   * entscheidet die Abdeckungsprüfung im Main-Thread.
+   */
+  | { type: 'forecast'; kind: ForecastKind; requestId: number; fromMs: number; toMs: number; keep: number }
+  /** Ohne `kind`: beide Jobs abbrechen. */
+  | { type: 'forecastCancel'; kind?: ForecastKind };
 
 export type WorkerResponse =
   /** Metadaten des eigenen Shards; `total` ist die Größe des Gesamtkatalogs. */
@@ -290,6 +351,30 @@ export type WorkerResponse =
       /** Virtuelle Zeit, ab der gesucht wurde. */
       fromMs: number;
       epoch: number;
+    }
+  /**
+   * Teilergebnis eines Shards zur Anfrage `requestId`. Die `points`-Buffer der
+   * Einträge gehen per Transfer. Ein `far`-Ergebnis trägt höchstens
+   * `FORECAST_FAR_KEEP` Einträge; `completeUntilMs` ist dort ohne Bedeutung.
+   */
+  | {
+      type: 'forecast';
+      kind: ForecastKind;
+      requestId: number;
+      shardIndex: number;
+      fromMs: number;
+      toMs: number;
+      entries: ForecastEntry[];
+      /**
+       * Bis hierhin fehlt kein Fenster. Hat der Shard mehr als `keep` Treffer,
+       * ist das der Rasterpunkt vor dem ersten weggelassenen (dessen
+       * Sichtbeginn liegt irgendwo im Rasterschritt davor), sonst toMs.
+       */
+      completeUntilMs: number;
+      /** Untersuchte Objekte, Propagationen und Rechenzeit (Summe der Scheiben) – Diagnose. */
+      scanned: number;
+      samples: number;
+      durationMs: number;
     }
   /** Rohtext, den der Lader-Shard an seine Geschwister weiterreichen lässt. */
   | { type: 'tle'; group: SatelliteGroup; text: string }

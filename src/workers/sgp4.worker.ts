@@ -18,6 +18,13 @@
  *
  * Der Main-Thread erhält ausschließlich flache, transferierbare
  * Float32Array-Buffer – und gibt sie zum Wiederverwenden zurück.
+ *
+ * Neben dem Tick beantwortet der Shard die Vorhersage „Demnächst sichtbar“
+ * (`forecast` hinein, `forecast` hinaus): Sichtfenster seiner eigenen Objekte
+ * in einem absoluten Zeitbereich, gerechnet in Zeitscheiben zwischen den
+ * Ticks. Zwei Arten mit je eigenem Job – `near` (Kurz-Scan für die Liste) und
+ * `far` (Lang-Scan „Ausblick“ bei leerer Liste, mit Nachrang); abgebrochen
+ * per `forecastCancel`, `observer` oder `stop`. Siehe `pumpForecast`.
  */
 import { twoline2satrec } from 'satellite.js';
 import type { SatRec } from 'satellite.js';
@@ -30,6 +37,8 @@ import {
   parseCosparId,
 } from '../data/tleSources';
 import { geoToObserverGd, normalizeAngle } from '../math/coords';
+import { FORECAST_STEP_MS, createScanContext, describeWindow, scanWindows } from '../math/forecast';
+import type { RawWindow, ScanContext } from '../math/forecast';
 import {
   buildObserverFrame,
   buildTickFrame,
@@ -53,6 +62,8 @@ import {
   T_SPEED,
 } from '../math/telemetryLayout';
 import type {
+  ForecastEntry,
+  ForecastKind,
   GeoCoord,
   NoradId,
   ObserverGd,
@@ -625,6 +636,256 @@ function buildTrail(noradId: NoradId, fromMin: number, toMin: number, samples: n
 }
 
 /* ------------------------------------------------------------------ */
+/* Vorhersage „Demnächst sichtbar“                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Längste Zeitscheibe des Kurz-Scans (`near`). Ein Scan am Stück hielte den
+ * Tick auf: gemessen 40 ms je 10 min über 16 075 Objekte auf einem
+ * Desktop-Kern (08.10.2026, src/math/forecast.ts), je Shard 1/n davon, mobil
+ * drei- bis fünfmal so viel. In Scheiben verspätet sich der Tick um höchstens
+ * eine Scheibe.
+ *
+ * Verifiziert 08.10.2026 (Wegwerf-Skript nach dem Muster von
+ * scripts/verify-timetravel.ts: 2 Shards als node:worker_threads, 16 081
+ * Objekte vom TLE-Spiegel, Frankfurt, Server mit 2 Kernen): Tick-Abstand bei
+ * `intervalMs` 100 während Kurz- und Lang-Scan höchstens 123 ms; ein Kurz-Scan
+ * über 22 min brauchte 70–112 ms Rechenzeit je Shard.
+ */
+const FORECAST_SLICE_MS = 6;
+/**
+ * Scheibe und Pause des Lang-Scans (`far`, „Ausblick“). Er kostet ≈ 320 ms
+ * auf einem Thread (90 min + Vorlauf, hochgerechnet aus derselben Messung)
+ * und darf weder den Tick noch einen Kurz-Scan verzögern: Vorrang für `near`
+ * in `pumpForecast`, dazu höchstens 4 von 16 ms ≈ 25 % des Threads.
+ *
+ * Verifiziert 08.10.2026 (selber Aufbau wie oben): Lang-Scan über 100 min
+ * allein 0,75–1,0 s Wanduhr bei 117–211 ms Rechenzeit je Shard (14–23 % des
+ * Threads). Ein Kurz-Scan mitten hinein antwortete nach 71–174 ms, ohne
+ * laufenden Lang-Scan nach 70–177 ms; der Lang-Scan antwortete danach mit
+ * demselben Ergebnis und derselben Rechenzeit wie allein – er setzt fort,
+ * statt neu zu beginnen.
+ */
+const FORECAST_FAR_SLICE_MS = 4;
+const FORECAST_FAR_GAP_MS = 12;
+
+/** Ein Scan über die eigenen Objekte. Der Fortschritt bleibt über die Scheiben hinweg stehen. */
+interface ForecastJob {
+  kind: ForecastKind;
+  requestId: number;
+  fromMs: number;
+  toMs: number;
+  keep: number;
+  /** Eigenes Raster und eigener TickFrame-Cache je Job – nur so lassen sich `near` und `far` verschränken. */
+  ctx: ScanContext;
+  phase: 'scan' | 'describe';
+  /** Phase `scan`: nächster eigener Slot. */
+  slot: number;
+  found: Array<{ slot: number; raw: RawWindow }>;
+  /** Phase `describe`: nächster Treffer in `found`. */
+  next: number;
+  described: ForecastEntry[];
+  /** Bis hierhin fehlt kein Fenster; feststehend am Ende der Phase `scan`. */
+  completeUntilMs: number;
+  scanned: number;
+  samples: number;
+  /** Summe der Scheiben, ohne die Pausen dazwischen. */
+  durationMs: number;
+}
+
+/**
+ * Höchstens ein Job je Art. Ein neuer Scan ersetzt nur den laufenden
+ * derselben Art; der andere bleibt samt Fortschritt stehen.
+ */
+const forecastJobs: { near: ForecastJob | null; far: ForecastJob | null } = { near: null, far: null };
+/** Eine Pumpe für beide Jobs. */
+let forecastTimer: ReturnType<typeof setTimeout> | null = null;
+/** Treffer eines Objekts – `scanWindows` leert und füllt das Feld bei jedem Aufruf. */
+const objectWindows: RawWindow[] = [];
+
+function pumpForecastIn(delayMs: number): void {
+  if (forecastTimer !== null) clearTimeout(forecastTimer);
+  forecastTimer = setTimeout(pumpForecast, delayMs);
+}
+
+/**
+ * Nimmt eine Anfrage an. Ohne Standort oder Katalog gibt es nichts zu
+ * rechnen: sofort eine leere Antwort, damit der Main-Thread nicht auf seinen
+ * Wachhund wartet.
+ *
+ * Die Zeiten der Anfrage sind absolut. `virtualNow()` kommt im ganzen
+ * Vorhersagepfad nicht vor – eine `time`-Nachricht während des Scans ändert
+ * am Ergebnis nichts, ob es noch gilt, entscheidet der Main-Thread.
+ */
+function startForecast(msg: Extract<WorkerRequest, { type: 'forecast' }>): void {
+  const { kind, requestId, fromMs, toMs, keep } = msg;
+  if (!observer || !observerFrame || own.length === 0) {
+    forecastJobs[kind] = null;
+    post({
+      type: 'forecast',
+      kind,
+      requestId,
+      shardIndex,
+      fromMs,
+      toMs,
+      entries: [],
+      completeUntilMs: toMs,
+      scanned: 0,
+      samples: 0,
+      durationMs: 0,
+    });
+    return;
+  }
+
+  forecastJobs[kind] = {
+    kind,
+    requestId,
+    fromMs,
+    toMs,
+    keep,
+    ctx: createScanContext(observer, observerFrame, fromMs, toMs),
+    phase: 'scan',
+    slot: 0,
+    found: [],
+    next: 0,
+    described: [],
+    completeUntilMs: toMs,
+    scanned: 0,
+    samples: 0,
+    durationMs: 0,
+  };
+  // Ein Kurz-Scan wartet nicht die Pause des Lang-Scans ab.
+  if (kind === 'near' || forecastTimer === null) pumpForecastIn(0);
+}
+
+/** Ohne `kind` beide Jobs. Die Pumpe läuft danach von selbst aus. */
+function cancelForecast(kind?: ForecastKind): void {
+  if (kind !== 'far') forecastJobs.near = null;
+  if (kind !== 'near') forecastJobs.far = null;
+}
+
+/**
+ * Ende der Phase `scan`: Treffer nach Rasterbeginn ordnen und festhalten, bis
+ * wohin die Antwort vollständig ist.
+ *
+ * Die Spezifikation (08.10.2026, §6) setzt dafür den Rasterpunkt des ersten
+ * weggelassenen Treffers, `t_k`. Sein Sichtbeginn liegt aber irgendwo in
+ * `(t_{k−1}, t_k]` – erst `describeWindow` schärft ihn nach. Mit `t_k` gälte
+ * ein Stand für ein Fenster, das bis zu 5 s vor dessen Ende beginnt, ohne ihn
+ * zu enthalten. `t_{k−1}` ist die sichere Grenze: Alle weggelassenen Treffer
+ * beginnen danach, keiner davor (Rasterpunkte, die `scanWindows` übersprang,
+ * sind beweisbar unsichtbar). Kein theoretischer Fall: Mit `keep` 2 begann
+ * am 08.10.2026 (Frankfurt, 17:50Z) das erste weggelassene Fenster eines
+ * Shards 0,16 s nach `t_{k−1}`, also 4,84 s vor `t_k` (verifiziert, Vergleich
+ * gegen dieselbe Anfrage mit `keep` 50).
+ */
+function finishScan(job: ForecastJob): void {
+  job.found.sort(
+    (a, b) =>
+      a.raw.startIndex - b.raw.startIndex ||
+      Number(b.raw.startOpen) - Number(a.raw.startOpen) ||
+      a.slot - b.slot,
+  );
+  if (job.found.length > job.keep) {
+    const firstLeftOut = job.found[job.keep].raw;
+    job.completeUntilMs = job.fromMs + Math.max(0, firstLeftOut.startIndex - 1) * FORECAST_STEP_MS;
+  }
+  job.phase = 'describe';
+}
+
+/**
+ * Rechnet am Job, bis die Scheibe aufgebraucht ist. Phase `scan`: ein eigenes
+ * Objekt nach dem anderen durch `scanWindows`. Phase `describe`: die `keep`
+ * frühesten Treffer durch `describeWindow`, danach die Antwort. Die Uhr wird
+ * je Objekt bzw. Fenster gelesen; eine Scheibe kommt also immer mindestens
+ * einen Schritt voran und überzieht höchstens um diesen (ein Fenster
+ * beschreiben ≈ 1,4 ms auf dem Desktop).
+ *
+ * Ein Katalog, der während des Scans wächst, wird bis zu seinem neuen Ende
+ * gelesen. Den Neuscan danach veranlasst ohnehin der Main-Thread
+ * (`catalogDirty`).
+ */
+function runForecastSlice(job: ForecastJob, sliceMs: number): void {
+  const startedAt = performance.now();
+  const deadline = startedAt + sliceMs;
+
+  if (job.phase === 'scan') {
+    while (job.slot < own.length && performance.now() < deadline) {
+      const entry = own[job.slot];
+      if (entry) {
+        job.samples += scanWindows(job.ctx, entry.satrec, entry.meta.standardMagnitude, objectWindows);
+        job.scanned += 1;
+        for (const raw of objectWindows) job.found.push({ slot: job.slot, raw });
+      }
+      job.slot += 1;
+    }
+    if (job.slot >= own.length) finishScan(job);
+  }
+
+  if (job.phase === 'describe') {
+    const count = Math.min(job.keep, job.found.length);
+    while (job.next < count && performance.now() < deadline) {
+      const { slot, raw } = job.found[job.next];
+      job.next += 1;
+      const entry = own[slot];
+      if (!entry) continue;
+      const described = describeWindow(job.ctx, entry.satrec, entry.meta.standardMagnitude, entry.meta.noradId, raw);
+      if (described) job.described.push(described);
+    }
+    job.durationMs += performance.now() - startedAt;
+    if (job.next < count) return;
+
+    forecastJobs[job.kind] = null;
+    post(
+      {
+        type: 'forecast',
+        kind: job.kind,
+        requestId: job.requestId,
+        shardIndex,
+        fromMs: job.fromMs,
+        toMs: job.toMs,
+        entries: job.described,
+        completeUntilMs: job.completeUntilMs,
+        scanned: job.scanned,
+        samples: job.samples,
+        durationMs: job.durationMs,
+      },
+      job.described.map((entry) => entry.points.buffer as ArrayBuffer),
+    );
+    return;
+  }
+
+  job.durationMs += performance.now() - startedAt;
+}
+
+/**
+ * Eine Pumpe für beide Jobs, eine Scheibe je Aufruf.
+ *
+ * Vorrang `near`: Solange ein Kurz-Scan offen ist, bekommt der Lang-Scan
+ * keine Scheibe. Er wird dabei nicht abgebrochen, sondern pausiert und setzt
+ * danach mit seinem Fortschritt fort. Ein `near`, das während eines `far`
+ * eintrifft, wartet höchstens das Ende der laufenden 4-ms-Scheibe ab
+ * (`startForecast` ersetzt eine anstehende Pause durch 0).
+ *
+ * Zwischen den Scheiben gibt `setTimeout` den Thread frei: Ein fälliger Tick
+ * (`schedule`, eigener Timer) und Nachrichten – `time`, ein neues `forecast`,
+ * ein Abbruch – kommen dazwischen an die Reihe. Die Pumpe liest den Job bei
+ * jedem Aufruf neu aus `forecastJobs`; ein ersetzter oder abgebrochener Job
+ * bekommt also keine Scheibe mehr und antwortet nie. Sind beide Plätze leer,
+ * endet sie ohne Neuplanung.
+ */
+function pumpForecast(): void {
+  forecastTimer = null;
+  const job = forecastJobs.near ?? forecastJobs.far;
+  if (!job) return;
+  runForecastSlice(job, job.kind === 'near' ? FORECAST_SLICE_MS : FORECAST_FAR_SLICE_MS);
+  // Die Pause gehört zur Scheibe, die als Nächstes läuft: Auch nach dem Ende
+  // eines Kurz-Scans bekommt der Lang-Scan erst nach 12 ms seine nächste.
+  const next = forecastJobs.near ?? forecastJobs.far;
+  if (next) pumpForecastIn(next.kind === 'near' ? 0 : FORECAST_FAR_GAP_MS);
+}
+
+/* ------------------------------------------------------------------ */
 /* Nachrichten                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -657,6 +918,10 @@ ctx.onmessage = (event: MessageEvent<WorkerRequest>) => {
     case 'observer':
       observer = geoToObserverGd(msg.observer as GeoCoord);
       observerFrame = buildObserverFrame(observer);
+      // Laufende Vorhersagen gehören zum alten Ort. Der Controller fragt mit
+      // neuer `requestId` neu an; `postMessage` hält die Reihenfolge, die
+      // neue Anfrage sieht also schon diesen Standort.
+      cancelForecast();
       break;
 
     case 'start':
@@ -670,11 +935,13 @@ ctx.onmessage = (event: MessageEvent<WorkerRequest>) => {
       running = false;
       if (timer !== null) clearTimeout(timer);
       timer = null;
+      cancelForecast();
       break;
 
     case 'time':
       // Gilt ab dem nächsten Tick. Die Nachricht wartet, bis ein laufender
       // Tick fertig ist; dieser und jeder davor meldet noch die alte Epoche.
+      // Vorhersage-Jobs laufen weiter: Sie rechnen in absoluten Zeiten.
       timeBase = msg.base;
       break;
 
@@ -712,5 +979,13 @@ ctx.onmessage = (event: MessageEvent<WorkerRequest>) => {
       post({ type: 'pass', noradId: msg.noradId, passes, fromMs, epoch });
       break;
     }
+
+    case 'forecast':
+      startForecast(msg);
+      break;
+
+    case 'forecastCancel':
+      cancelForecast(msg.kind);
+      break;
   }
 };

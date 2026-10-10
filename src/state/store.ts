@@ -1,4 +1,10 @@
 import { create } from 'zustand';
+import {
+  FORECAST_DEFAULT_WINDOW_MIN,
+  FORECAST_STORAGE_KEY,
+  FORECAST_WINDOWS_MIN,
+} from '../data/forecast';
+import type { ForecastWindowMin } from '../data/forecast';
 import { normalizeNoradId } from '../data/tleSources';
 import { resolveSelection } from './runtime';
 import type {
@@ -93,6 +99,15 @@ export interface AppState {
   theme: ThemePreference;
   sun: SunState;
   moon: MoonState;
+  /** Zeitfenster der Vorhersage „Demnächst sichtbar“ in Minuten, persistiert wie das Theme. */
+  forecastWindowMin: ForecastWindowMin;
+  /**
+   * Steigt, wenn sich die Menge der Vorhersage-Einträge ändert
+   * (`forecastView.membershipVersion`, src/state/runtime.ts). Die Daten selbst
+   * liegen außerhalb des Stores; die Liste abonniert nur diesen Zähler und
+   * rendert so nicht in jedem Countdown-Takt neu.
+   */
+  forecastRevision: number;
 
   setObserver: (observer: GeoCoord) => void;
   setGeoError: (message: string | null) => void;
@@ -114,6 +129,9 @@ export interface AppState {
   toggleNightMode: () => void;
   toggleTrails: () => void;
   setTheme: (theme: ThemePreference) => void;
+  setForecastWindow: (min: ForecastWindowMin) => void;
+  /** Nur für den Vorhersage-Controller (useVisibilityForecast). */
+  bumpForecastRevision: () => void;
   setSun: (sun: SunState) => void;
   setMoon: (moon: MoonState) => void;
   /** Nur für `engine` – er schickt dieselbe Basis an die Shards. */
@@ -167,6 +185,18 @@ function readStoredTheme(): ThemePreference {
   return 'system';
 }
 
+/** Gespeichertes Zeitfenster der Vorhersage; Unbekanntes oder Fehlendes → Standard (10 min). */
+function readStoredForecastWindow(): ForecastWindowMin {
+  try {
+    const value = localStorage.getItem(FORECAST_STORAGE_KEY);
+    const stored = FORECAST_WINDOWS_MIN.find((min) => String(min) === value);
+    if (stored !== undefined) return stored;
+  } catch {
+    /* Privater Modus o. Ä. – dann gilt das Standardfenster. */
+  }
+  return FORECAST_DEFAULT_WINDOW_MIN;
+}
+
 export const useAppStore = create<AppState>((set) => ({
   observer: null,
   geoError: null,
@@ -198,6 +228,8 @@ export const useAppStore = create<AppState>((set) => ({
   theme: readStoredTheme(),
   sun: { altitudeDeg: -18, azimuthDeg: 0 },
   moon: { altitudeDeg: -18, azimuthDeg: 0, illumination: 0.5 },
+  forecastWindowMin: readStoredForecastWindow(),
+  forecastRevision: 0,
 
   setObserver: (observer) => set({ observer, geoError: null }),
   setGeoError: (geoError) => set({ geoError }),
@@ -275,6 +307,15 @@ export const useAppStore = create<AppState>((set) => ({
     }
     set({ theme });
   },
+  setForecastWindow: (forecastWindowMin) => {
+    try {
+      localStorage.setItem(FORECAST_STORAGE_KEY, String(forecastWindowMin));
+    } catch {
+      /* Ohne Persistenz gilt die Wahl nur für diese Sitzung. */
+    }
+    set({ forecastWindowMin });
+  },
+  bumpForecastRevision: () => set((state) => ({ forecastRevision: state.forecastRevision + 1 })),
   setSun: (sun) => set({ sun }),
   setMoon: (moon) => set({ moon }),
   // Ein Sprung macht die Überflugliste im selben Schritt ungültig: Sie wurde

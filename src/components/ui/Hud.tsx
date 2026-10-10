@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { ForecastList } from './ForecastList';
 import { RadarMap } from './RadarMap';
 import { SatelliteDrawer } from './SatelliteDrawer';
 import { TelemetryPanel } from './TelemetryPanel';
@@ -17,6 +18,7 @@ const HUD_MIN_BOTTOM_HEIGHT = '3.75rem';
 /** 2D-Overlay über dem WebGL-Canvas. Klicks fallen standardmäßig durch. */
 export function Hud(): React.JSX.Element {
   const selectedIndex = useAppStore((s) => s.selectedIndex);
+  const mode = useAppStore((s) => s.filters.mode);
 
   // Auf Telefonbreite ist neben dem ausgeklappten Panel kein Platz mehr fürs
   // Radar, ohne dass beide sich überlagern oder gemeinsam bis in die TopBar
@@ -96,18 +98,32 @@ export function Hud(): React.JSX.Element {
         quer mit verweigerter Ortung 160 px, mit allen vier Hinweisen nur noch
         38 px. Ein schmaler Streifen Radar ist wenig nützlich – ausblenden oder
         skalieren, wenn es nicht ganz passt, wäre die bessere Lösung.
+
+        Der Container reicht jetzt über die volle Breite (`right-0` statt nur
+        `left-0`): Die Liste „Demnächst sichtbar“ steht als zweites Flex-Kind
+        rechts neben dem Radar, gleich hoch (164 px), und braucht dafür den
+        Platz bis zum rechten Rand. Anders als das Radar weicht sie bei einer
+        Auswahl auf ALLEN Breiten, nicht nur auf Telefonbreite: Ab `sm` stünde
+        sie sonst dort, wo ab 640 px das TelemetryPanel wächst (gemessen bis
+        810 px) – eine zweite Karte am rechten Rand kollidierte mit der
+        ersten. Ohne Auswahl ist dieser Platz dagegen frei (der einzige
+        Zustand, in dem das gilt), deshalb die Bedingung unten
+        (`mode === 'nakedEye' && selectedIndex === null`) statt der
+        breakpoint-abhängigen `hideRadarOnPhone`.
       */}
       <div
-        className={`absolute left-0 bottom-0 z-20 overflow-hidden ${
-          hideRadarOnPhone ? 'hidden sm:flex sm:items-end' : 'flex items-end'
+        className={`absolute left-0 right-0 bottom-0 z-20 overflow-hidden ${
+          hideRadarOnPhone ? 'hidden sm:flex sm:items-end sm:gap-2' : 'flex items-end gap-2'
         }`}
         style={{
           top: 'calc(var(--hud-top-free) + 0.75rem)',
           paddingBottom: 'calc(var(--safe-bottom) + 0.75rem)',
           paddingLeft: 'calc(var(--safe-left) + 0.75rem)',
+          paddingRight: 'calc(var(--safe-right) + 0.75rem)',
         }}
       >
         <RadarMap />
+        {mode === 'nakedEye' && selectedIndex === null && <ForecastList />}
       </div>
 
       {/*

@@ -88,29 +88,17 @@ export function apparentMagnitude(
   return standardMagnitude + distanceTerm + phaseTerm + extinction;
 }
 
-export interface NakedEyeInput {
-  magnitude: number;
-  elevationRad: number;
-  eclipsed: boolean;
-}
-
 /**
- * „Realistisch mit bloßem Auge sichtbar“: sonnenbeschienenes Objekt,
- * ausreichende Höhe über dem Horizont und Helligkeit über der
- * Wahrnehmungsschwelle.
+ * Gemeinsames Filterkriterium für 3D-Szene, Radar, Auswahl und Liste – und
+ * die einzige Stelle, an der die Schwelle „Sichtbar“ steht: Überflugliste
+ * (`isNakedEyeSample` in propagation.ts) und Vorhersage (`nakedEyeAt` in
+ * forecast.ts) rufen sie ebenfalls auf.
  *
- * Der Sonnenstand am Beobachterort geht bewusst *nicht* ein: Die App trennt
- * nicht zwischen Tag und Nacht, es sind immer alle aktuellen Objekte am
- * Himmel darstellbar.
- */
-export function isNakedEyeVisible(input: NakedEyeInput): boolean {
-  if (input.eclipsed) return false;
-  if (input.elevationRad < NAKED_EYE_MIN_ELEVATION) return false;
-  return input.magnitude <= NAKED_EYE_LIMIT;
-}
-
-/**
- * Gemeinsames Filterkriterium für 3D-Szene, Radar, Auswahl und Liste.
+ * „Realistisch mit bloßem Auge sichtbar“ (`nakedEye`): sonnenbeschienenes
+ * Objekt, ausreichende Höhe über dem Horizont und Helligkeit über der
+ * Wahrnehmungsschwelle. Der Sonnenstand am Beobachterort geht bewusst *nicht*
+ * ein: Die App trennt nicht zwischen Tag und Nacht, es sind immer alle
+ * aktuellen Objekte am Himmel darstellbar.
  *
  * Positionale Parameter statt Options-Objekt: Die Funktion läuft pro Frame
  * über den gesamten Katalog und darf dabei nichts allozieren.

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { FORECAST_COLOR } from '../../data/forecast';
 import { GROUP_COLORS, GROUP_ORDER } from '../../data/groups';
 import {
   TELEMETRY_STRIDE,
@@ -9,8 +10,10 @@ import {
   T_RANGE,
 } from '../../math/telemetryLayout';
 import { passesSkyFilter } from '../../math/visibility';
-import { catalogIndex, telemetry, viewState } from '../../state/runtime';
-import { useAppStore } from '../../state/store';
+import { forecastPointAt } from '../../state/forecastView';
+import { catalogIndex, forecastView, telemetry, viewState } from '../../state/runtime';
+import { useAppStore, virtualNow } from '../../state/store';
+import type { ForecastEntry, Vec3 } from '../../types';
 import { useResolvedTheme } from '../../hooks/useTheme';
 
 const SIZE = 164;
@@ -33,6 +36,8 @@ interface Palette {
   label: string;
   zenith: string;
   selection: string;
+  /** Spur der Vorhersage „Demnächst sichtbar“ – Gold wie HighlightMarkers, in beiden Themes fest. */
+  forecast: string;
 }
 
 const PALETTES: Record<'light' | 'dark', Palette> = {
@@ -46,6 +51,7 @@ const PALETTES: Record<'light' | 'dark', Palette> = {
     label: 'rgba(235, 235, 245, 0.66)',
     zenith: 'rgba(235, 235, 245, 0.5)',
     selection: '#ff375f',
+    forecast: FORECAST_COLOR,
   },
   light: {
     // Die Scheibe bleibt auch hier dunkel: Sie bildet den Nachthimmel ab, und
@@ -63,6 +69,7 @@ const PALETTES: Record<'light' | 'dark', Palette> = {
     label: 'rgba(60, 60, 67, 0.75)',
     zenith: 'rgba(235, 235, 245, 0.55)',
     selection: '#ff375f',
+    forecast: FORECAST_COLOR,
   },
 };
 
@@ -86,6 +93,81 @@ function makeBuckets(): { list: Bucket[]; capacity: number } {
   };
 }
 
+/** Kopf/Spurpunkt der Vorhersage „Demnächst sichtbar“ – wiederverwendet, je Bild keine Allokation. */
+const forecastPoint: Vec3 = { x: 0, y: 0, z: 0 };
+/** Projektion des jeweils letzten Vorhersage-Punkts auf die Scheibe (Scheibenkoordinaten), ebenfalls wiederverwendet. */
+const projected = { x: 0, y: 0, visible: false };
+
+/**
+ * Projiziert einen Einheitsvektor der Vorhersage-Spur (ENU, y Zenit, Konvention
+ * wie `buildTrail`/`forecastPointAt`) auf die Radarscheibe, schreibt nach
+ * `projected`. Dieselbe Rechnung wie für die Satellitenpunkte oben (Z. 230–233,
+ * Höhe in Grad!), nur dass die Höhe hier erst aus dem Vektor gewonnen werden
+ * muss: `el = asin(y)`, `az = atan2(x, −z)`. Unter dem Horizont (`el < 0`)
+ * `projected.visible = false` – der Aufrufer unterbricht den Pfad dort.
+ */
+function projectForecastVector(x: number, y: number, z: number, cx: number, cy: number, radius: number): void {
+  const elevationDeg = Math.asin(Math.min(1, Math.max(-1, y))) / DEG_TO_RAD;
+  projected.visible = elevationDeg >= 0;
+  if (!projected.visible) return;
+  const azimuth = Math.atan2(x, -z);
+  const r = (1 - elevationDeg / 90) * radius;
+  projected.x = cx + r * Math.sin(azimuth);
+  projected.y = cy - r * Math.cos(azimuth);
+}
+
+/**
+ * Fügt die Teilspur eines Vorhersage-Eintrags zwischen `fromMs` und `toMs` dem
+ * aktuell offenen Canvas-Pfad hinzu: Kopf, alle echten Spurpunkte dazwischen
+ * (dieselbe Indexrechnung wie `writeTrace` in VisibilityForecast.tsx), Ende.
+ * Punkte unter dem Horizont unterbrechen den Pfad statt eines `lineTo`
+ * dorthin – der Aufrufer ruft `ctx.beginPath()`/`stroke()` einmal für alle
+ * Einträge einer Art (dim/bright), nicht je Eintrag.
+ */
+function addForecastSegment(
+  ctx: CanvasRenderingContext2D,
+  entry: ForecastEntry,
+  fromMs: number,
+  toMs: number,
+  cx: number,
+  cy: number,
+  radius: number,
+): void {
+  const count = Math.floor(entry.points.length / 3);
+  if (count < 2 || fromMs >= toMs) return;
+  const points = entry.points;
+  const first = entry.traceStartMs;
+  const step = entry.stepMs;
+  const last = first + (count - 1) * step;
+  const a = Math.min(Math.max(fromMs, first), last);
+  const b = Math.min(Math.max(toMs, first), last);
+  if (a >= b) return;
+
+  let open = false;
+  forecastPointAt(entry, a, forecastPoint);
+  projectForecastVector(forecastPoint.x, forecastPoint.y, forecastPoint.z, cx, cy, radius);
+  if (projected.visible) {
+    ctx.moveTo(projected.x, projected.y);
+    open = true;
+  }
+  for (let k = Math.floor((a - first) / step) + 1; k < count && first + k * step < b; k += 1) {
+    projectForecastVector(points[k * 3], points[k * 3 + 1], points[k * 3 + 2], cx, cy, radius);
+    if (!projected.visible) {
+      open = false;
+      continue;
+    }
+    if (open) ctx.lineTo(projected.x, projected.y);
+    else ctx.moveTo(projected.x, projected.y);
+    open = true;
+  }
+  forecastPointAt(entry, b, forecastPoint);
+  projectForecastVector(forecastPoint.x, forecastPoint.y, forecastPoint.z, cx, cy, radius);
+  if (projected.visible) {
+    if (open) ctx.lineTo(projected.x, projected.y);
+    else ctx.moveTo(projected.x, projected.y);
+  }
+}
+
 /**
  * Polar-Radar: Zenit im Mittelpunkt, Horizont am Außenrand.
  *
@@ -102,13 +184,18 @@ export function RadarMap(): React.JSX.Element {
   // Platz, nicht NORAD-ID: Die Zeichenschleife vergleicht je Objekt nur
   // Zahlen (`i === selected`). -1 (ID nicht im Katalog) trifft keinen Platz.
   const selectedIndex = useAppStore((s) => s.selectedIndex);
+  // Blendet nur die Vorhersage-Spuren aus (wie bei VisibilityForecast.tsx);
+  // als Ref, damit das Umschalten die Zeichenschleife nicht neu startet.
+  const showTrails = useAppStore((s) => s.showTrails);
   const scheme = useResolvedTheme();
 
   const modeRef = useRef(mode);
   const selectedRef = useRef(selectedIndex);
+  const showTrailsRef = useRef(showTrails);
   const paletteRef = useRef(PALETTES[scheme]);
   modeRef.current = mode;
   selectedRef.current = selectedIndex;
+  showTrailsRef.current = showTrails;
   paletteRef.current = PALETTES[scheme];
 
   useEffect(() => {
@@ -265,6 +352,55 @@ export function RadarMap(): React.JSX.Element {
         ctx.fill();
       }
       ctx.globalAlpha = 1;
+
+      // Vorhersage „Demnächst sichtbar“: dieselbe Spur wie am Himmel
+      // (VisibilityForecast.tsx), gestrichelt/kräftig in Gold, hier auf die
+      // Scheibe projiziert statt in den 3D-Raum gezeichnet, eine Spur je
+      // Verbund. `forecastView` liegt wie `telemetry`/`catalogIndex`
+      // außerhalb von React.
+      if (modeRef.current === 'nakedEye' && showTrailsRef.current && forecastView.status === 'ready') {
+        const slots = forecastView.slots;
+        if (slots.length > 0) {
+          const nowMs = virtualNow();
+
+          // Gestrichelter Teil (Kopf → Sichtbeginn), ein Pfad für alle Einträge.
+          ctx.strokeStyle = p.forecast;
+          ctx.setLineDash([2.5, 2.5]);
+          ctx.lineWidth = 1;
+          ctx.globalAlpha = 0.6;
+          ctx.beginPath();
+          for (const slot of slots) {
+            const entry = slot.entry;
+            if (nowMs < entry.startMs) addForecastSegment(ctx, entry, nowMs, entry.startMs, cx, cy, radius);
+          }
+          ctx.stroke();
+
+          // Kräftiger Teil (max(Kopf, Sichtbeginn) → Sichtende), eigener Pfad.
+          ctx.setLineDash([]);
+          ctx.lineWidth = 1.6;
+          ctx.globalAlpha = 0.95;
+          ctx.beginPath();
+          for (const slot of slots) {
+            const entry = slot.entry;
+            const from = Math.max(nowMs, entry.startMs);
+            if (from < entry.endMs) addForecastSegment(ctx, entry, from, entry.endMs, cx, cy, radius);
+          }
+          ctx.stroke();
+
+          // Hohler Ring am Kopf bevorstehender Einträge (noch nicht sichtbar).
+          ctx.globalAlpha = 1;
+          ctx.lineWidth = 1;
+          for (const slot of slots) {
+            if (slot.visibleNow) continue;
+            forecastPointAt(slot.entry, nowMs, forecastPoint);
+            projectForecastVector(forecastPoint.x, forecastPoint.y, forecastPoint.z, cx, cy, radius);
+            if (!projected.visible) continue;
+            ctx.beginPath();
+            ctx.arc(projected.x, projected.y, 2.5, 0, TAU);
+            ctx.stroke();
+          }
+        }
+      }
 
       if (selectedVisible) {
         ctx.beginPath();

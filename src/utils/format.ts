@@ -74,6 +74,61 @@ export function formatRemaining(endMs: number, nowMs: number): string {
   return `noch ${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')} h`;
 }
 
+/** Sekunden als „m:ss“ – Minuten ohne Obergrenze („64:05“). */
+function minutesSeconds(totalSec: number): string {
+  return `${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, '0')}`;
+}
+
+/**
+ * Countdown der Vorhersage „Demnächst sichtbar“ bis `targetMs`: „in 3:20“,
+ * bei erreichtem Ziel „jetzt“.
+ *
+ * Sekunden aufgerundet: „in 0:01“ heißt „höchstens noch eine Sekunde“, und
+ * „jetzt“ erscheint erst, wenn das Ziel wirklich erreicht ist – im selben
+ * Moment, in dem der Eintrag zu „noch …“ wechselt. Feste Form m:ss, weil die
+ * Angabe in jedem Takt springt; mit `tabular-nums` wackelt sie so nicht.
+ * `nowMs` ist Pflicht (Muster `formatCountdown`): virtuelle Zeit.
+ */
+export function formatForecastCountdown(targetMs: number, nowMs: number): string {
+  const diff = Math.ceil((targetMs - nowMs) / 1000);
+  if (diff <= 0) return 'jetzt';
+  return `in ${minutesSeconds(diff)}`;
+}
+
+/**
+ * Restzeit eines gerade sichtbaren Vorhersage-Eintrags: „noch 4:10“, bei
+ * offenem Ende (länger als das beschriebene Fenster, MEO/HEO) „sichtbar“.
+ * Aufgerundet und nie negativ. `nowMs` ist Pflicht: virtuelle Zeit.
+ */
+export function formatForecastRemaining(endMs: number, nowMs: number, endOpen: boolean): string {
+  if (endOpen) return 'sichtbar';
+  return `noch ${minutesSeconds(Math.max(0, Math.ceil((endMs - nowMs) / 1000)))}`;
+}
+
+/**
+ * Abstand zum Sichtbeginn des Kandidaten in der Ausblick-Zeile („Nächster:
+ * …“): „in 47 min“, ab einer Stunde „in 1 h 12 min“, glatt „in 2 h“.
+ *
+ * Ohne Sekunden – die Karte ist nur 122–197 px breit (320–393 px
+ * Bildschirmbreite), und auf eine Minute genau reicht für einen Kandidaten,
+ * der bis zu 90 min entfernt ist. Aufgerundet, mindestens 1: Rückt der
+ * Sichtbeginn ins Zeitfenster, übernimmt ohnehin die Liste mit
+ * sekundengenauem Countdown. `nowMs` ist Pflicht: virtuelle Zeit.
+ *
+ * Aufgerundet statt gerundet (Abweichung von der Spezifikation 08.10.2026,
+ * §5): Die Zeile steht nur, solange der Sichtbeginn mehr als W Minuten
+ * entfernt ist. Gerundet hieße der Kandidat 30 s lang „in 10 min“, während
+ * der Zustandstext darüber „Keine in den nächsten 10 min“ sagt; aufgerundet
+ * zeigt alles hinter now + W mindestens W + 1 Minuten.
+ */
+export function formatForecastNext(startMs: number, nowMs: number): string {
+  const minutes = Math.max(1, Math.ceil((startMs - nowMs) / 60_000));
+  if (minutes < 60) return `in ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `in ${hours} h` : `in ${hours} h ${rest} min`;
+}
+
 /**
  * Stand der Überflugliste zur Zeit `nowMs`: der erste Eintrag, der noch nicht
  * vorbei ist, ob er gerade läuft, und die Angabe dafür. Bleibt die Karte über

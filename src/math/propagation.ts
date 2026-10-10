@@ -17,9 +17,9 @@ import { isEclipsed, sunEciUnitVector } from './sun';
 import {
   INVISIBLE_MAGNITUDE,
   NAKED_EYE_LIMIT,
-  NAKED_EYE_MIN_ELEVATION,
   apparentMagnitude,
   illuminatedFraction,
+  passesSkyFilter,
   phaseAngle,
 } from './visibility';
 
@@ -172,8 +172,55 @@ export interface PassOptions {
   standardMagnitude?: number;
 }
 
-/** Abtastschritt innerhalb eines gefundenen Überflugs für die Helligkeitsanalyse. */
+/** Abtastschritt innerhalb eines gefundenen Überflugs für Beleuchtung und Helligkeitsmaximum. */
 const BRIGHTNESS_STEP_MS = 15_000;
+
+/**
+ * Abtastschritt für das Sichtfenster im Überflug – das Raster der Vorhersage
+ * „Demnächst sichtbar“ (`FORECAST_STEP_MS` in src/math/forecast.ts). Jedes
+ * Sichtfenster ab 5 s enthält einen Abtastpunkt; genau die findet die Liste
+ * sicher, also muss das Panel sie ebenso finden. Mit den 15 s oben fehlte
+ * ihm etwa ARIANE 40 R/B (Frankfurt 07.10.2026, 19:59:40–19:59:49Z, 8,4 s):
+ * Liste „in 9:40“, Panel „nur optisch“ ohne Sichtfenster – in jedem von 881
+ * Aufrufen mit verschobenem Suchbeginn (nachgerechnet 08.10.2026).
+ *
+ * Feiner abgetastet wird nur, wo das Objekt zwischen zwei Abtastungen
+ * überhaupt hell genug werden kann (Entfernungsschranke wie `scanWindows`).
+ * Ein geostationärer Bogen über 48 h kostet so nichts zusätzlich; durchweg
+ * im 5-s-Takt brauchte er 223 statt 118 ms (ASTRA 1KR, Server, 09.10.2026).
+ */
+const NAKED_EYE_STEP_MS = 5_000;
+
+/**
+ * Obergrenze der Änderungsrate der Entfernung Beobachter–Objekt in km/s:
+ * Fluchtgeschwindigkeit an der Erdoberfläche (11,19) plus Erddrehung (0,47),
+ * aufgerundet. Gilt für jede gebundene Bahn, auch bei veralteten SDP4-Sätzen,
+ * und braucht keine Bahnelemente – siehe `scanWindows` in src/math/forecast.ts.
+ *
+ * Diese Schranke und die beiden folgenden Definitionen gehören zur Vorhersage
+ * (forecast.ts exportiert sie weiter); sie stehen hier, weil auch
+ * `analyseBrightness` sie braucht und forecast.ts diese Datei importiert.
+ */
+export const FORECAST_RANGE_RATE_KM_S = 11.7;
+/**
+ * Rand der Entfernungsschranke in Größenklassen. Phasen- und Extinktionsterm
+ * sind ≥ 0 bis auf die Luftmasse im Zenit (0,9997 nach Kasten & Young →
+ * −0,00007 mag); 0,001 deckt das samt Float32-Rundung im Scratch ab.
+ */
+export const FORECAST_MAG_MARGIN = 0.001;
+
+/**
+ * Größte Entfernung in km, bei der ein Objekt der Standardhelligkeit
+ * `standardMagnitude` die Grenzhelligkeit noch erreichen kann.
+ *
+ * `apparentMagnitude` = std + 5·log10(range/1000) + Phasenterm + Extinktion.
+ * Phasen- und Extinktionsterm sind ≥ 0 (bis auf den Rand, s.
+ * `FORECAST_MAG_MARGIN`), also ist jedes Objekt mit `range > limit` beweisbar
+ * schwächer als 4,0 mag. Beispiele: Starlink (5,5) ≈ 501 km, ISS (−1,8) ≈ 14 455 km.
+ */
+export function forecastRangeLimitKm(standardMagnitude: number): number {
+  return 1000 * Math.pow(10, (NAKED_EYE_LIMIT - standardMagnitude + FORECAST_MAG_MARGIN) / 5);
+}
 
 /** Auflösung, auf die Beginn und Ende des Sichtfensters nachgeschärft werden. */
 const NAKED_EYE_REFINE_MS = 1_000;
@@ -194,6 +241,8 @@ interface LightSample {
   elevation: number;
   magnitude: number;
   phase: number;
+  /** Entfernung in km – für die Entfernungsschranke des Sichtfensters. */
+  rangeKm: number;
 }
 
 /** Beleuchtung und Helligkeit zu einem Zeitpunkt; `null`, wenn SGP4 divergiert. */
@@ -209,7 +258,13 @@ function lightAt(
   const sunUnit = sunEciUnitVector(date);
   const position = found.position as Vec3;
   if (isEclipsed(position, sunUnit)) {
-    return { eclipsed: true, elevation: found.look.elevation, magnitude: INVISIBLE_MAGNITUDE, phase: Math.PI };
+    return {
+      eclipsed: true,
+      elevation: found.look.elevation,
+      magnitude: INVISIBLE_MAGNITUDE,
+      phase: Math.PI,
+      rangeKm: found.look.rangeSat,
+    };
   }
   const phase = phaseAngle(position, observerEciPosition(observer, date), sunUnit);
   return {
@@ -217,19 +272,21 @@ function lightAt(
     elevation: found.look.elevation,
     magnitude: apparentMagnitude(standardMagnitude, found.look.rangeSat, phase, found.look.elevation),
     phase,
+    rangeKm: found.look.rangeSat,
   };
 }
 
 /**
- * Dieselbe Bedingung wie der Himmelsfilter „Sichtbar“ (`passesSkyFilter`):
- * beschienen, mindestens 10° hoch, nicht schwächer als die Grenzhelligkeit.
+ * Dieselbe Bedingung wie der Himmelsfilter „Sichtbar“: beschienen, mindestens
+ * 10° hoch, nicht schwächer als die Grenzhelligkeit. Delegiert an
+ * `passesSkyFilter`, damit die Schwelle genau einmal existiert – Filter,
+ * Überflugliste und Vorhersage (src/math/forecast.ts) schalten so garantiert
+ * im selben Moment um.
  */
 function isNakedEyeSample(sample: LightSample | null): boolean {
   return (
     sample !== null &&
-    !sample.eclipsed &&
-    sample.elevation >= NAKED_EYE_MIN_ELEVATION &&
-    sample.magnitude <= NAKED_EYE_LIMIT
+    passesSkyFilter('nakedEye', false, sample.elevation, sample.eclipsed, sample.magnitude)
   );
 }
 
@@ -279,24 +336,29 @@ function analyseBrightness(
 
   const result = { ...empty };
   const steps = Math.max(2, Math.ceil((los - aos) / BRIGHTNESS_STEP_MS));
+  // Teilpunkte je Abtastschritt: Das Sichtfenster wird höchstens im Abstand
+  // `NAKED_EYE_STEP_MS` abgetastet (das Maximum nimmt die Teilpunkte mit),
+  // die beschienene Zeit weiter im groben Schritt.
+  const substeps = Math.ceil((los - aos) / steps / NAKED_EYE_STEP_MS);
+  const stepSec = (los - aos) / steps / 1000;
+  const limitKm = forecastRangeLimitKm(standardMagnitude);
   // Zeitpunkt der vorigen Abtastung, falls sie beschienen war – sonst `null`.
   let previousSunlitMs: number | null = null;
-  // Vorige Abtastung überhaupt, für die Ränder des Sichtfensters.
+  // Vorige Abtastung überhaupt (auch Teilpunkt), für die Ränder des Sichtfensters.
   let previousMs = aos;
   let previousNakedEye = false;
+  // Entfernung der vorigen groben Abtastung, NaN ohne Propagation.
+  let previousRangeKm = Number.NaN;
 
-  for (let i = 0; i <= steps; i += 1) {
-    const ms = aos + ((los - aos) * i) / steps;
-    const sample = lightAt(satrec, observer, ms, standardMagnitude);
-
-    // Sichtfenster: vom ersten bis zum letzten Moment, in dem der Satellit die
-    // Bedingung des Filters „Sichtbar“ erfüllt – beide Ränder per Bisektion auf
-    // eine Sekunde genau, damit das Panel zur selben Zeit umschaltet wie der
-    // Filter in der Szene. Eine Lücke dazwischen (Erdschatten mitten im Bogen)
-    // bleibt im Fenster; das Panel prüft „jetzt sichtbar“ deshalb live.
+  // Sichtfenster: vom ersten bis zum letzten Moment, in dem der Satellit die
+  // Bedingung des Filters „Sichtbar“ erfüllt – beide Ränder per Bisektion auf
+  // eine Sekunde genau, damit das Panel zur selben Zeit umschaltet wie der
+  // Filter in der Szene. Eine Lücke dazwischen (Erdschatten mitten im Bogen)
+  // bleibt im Fenster; das Panel prüft „jetzt sichtbar“ deshalb live.
+  const observeNakedEye = (ms: number, sample: LightSample | null): void => {
     const nakedEye = isNakedEyeSample(sample);
     if (nakedEye && !previousNakedEye) {
-      const start = i > 0 ? refineNakedEyeEdge(satrec, observer, standardMagnitude, ms, previousMs) : ms;
+      const start = ms > aos ? refineNakedEyeEdge(satrec, observer, standardMagnitude, ms, previousMs) : ms;
       if (result.nakedEyeStart === null) result.nakedEyeStart = start;
     }
     if (!nakedEye && previousNakedEye) {
@@ -312,6 +374,36 @@ function analyseBrightness(
     }
     previousNakedEye = nakedEye;
     previousMs = ms;
+  };
+
+  for (let i = 0; i <= steps; i += 1) {
+    const ms = aos + ((los - aos) * i) / steps;
+    const sample = lightAt(satrec, observer, ms, standardMagnitude);
+    const rangeKm = sample ? sample.rangeKm : Number.NaN;
+
+    // Teilpunkte zwischen der vorigen und dieser Abtastung – nur, wo das
+    // Objekt dazwischen hell genug werden kann. Die Entfernung ändert sich
+    // höchstens mit `FORECAST_RANGE_RATE_KM_S`, im Abschnitt ist sie also
+    // mindestens (r₁ + r₂ − Rate·Δt) / 2. Ohne Entfernung (NaN) wird geprüft.
+    if (i > 0 && substeps > 1) {
+      const nearestKm = (previousRangeKm + rangeKm - FORECAST_RANGE_RATE_KM_S * stepSec) / 2;
+      if (!(nearestKm > limitKm)) {
+        const intervalStart = aos + ((los - aos) * (i - 1)) / steps;
+        for (let k = 1; k < substeps; k += 1) {
+          const sub = intervalStart + ((ms - intervalStart) * k) / substeps;
+          const subSample = lightAt(satrec, observer, sub, standardMagnitude);
+          observeNakedEye(sub, subSample);
+          // Das Maximum gleich mit: Sonst stünde neben einem Sichtfenster eine
+          // Spitze über der Grenzhelligkeit (ARIANE 40 R/B oben: 4,04 statt 3,83 mag).
+          if (subSample && !subSample.eclipsed && subSample.magnitude < result.peakMagnitude) {
+            result.peakMagnitude = subSample.magnitude;
+            result.illumination = illuminatedFraction(subSample.phase);
+          }
+        }
+      }
+    }
+    observeNakedEye(ms, sample);
+    previousRangeKm = rangeKm;
 
     if (!sample || sample.eclipsed) {
       previousSunlitMs = null;
