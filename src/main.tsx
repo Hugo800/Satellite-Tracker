@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { registerSW } from 'virtual:pwa-register';
 import App from './App';
+import { startInstallPromptCapture } from './utils/installHint';
 import { watchViewportShortfall } from './utils/viewportShortfallWatch';
 import './index.css';
 
@@ -20,6 +21,10 @@ if (!container) throw new Error('Root-Element nicht gefunden');
 // müsste sie ungeprüft doppeln; vor dem ersten Rendern ist ohnehin nur die
 // schwarze Grundfläche zu sehen.
 watchViewportShortfall();
+
+// Aus demselben Grund vor dem ersten Rendern: `beforeinstallprompt` kann vor
+// dem ersten Commit kommen und kommt dann nicht wieder (src/utils/installHint.ts).
+startInstallPromptCapture(window);
 
 createRoot(container).render(
   <StrictMode>

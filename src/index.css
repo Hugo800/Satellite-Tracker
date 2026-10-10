@@ -513,6 +513,18 @@ body {
   animation: soft-pulse 1.8s var(--ease-standard) infinite;
 }
 
+/* Hinweis „Zum Home-Bildschirm“ (InstallHint.tsx) gleitet von unten herein. */
+@keyframes install-hint-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+}
+
+.install-hint-in {
+  animation: install-hint-in var(--t-slow) var(--ease-out) both;
+}
+
 /* Astronomischer Nachtmodus: entfernt Blau-/Grünanteile aus UI *und* WebGL-Canvas. */
 .night-vision {
   filter: grayscale(1) sepia(1) hue-rotate(-38deg) saturate(7) brightness(0.72) contrast(1.15);

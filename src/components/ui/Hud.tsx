@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ForecastList } from './ForecastList';
+import { InstallHint } from './InstallHint';
 import { RadarMap } from './RadarMap';
 import { SatelliteDrawer } from './SatelliteDrawer';
 import { TelemetryPanel } from './TelemetryPanel';
@@ -162,6 +163,9 @@ export function Hud(): React.JSX.Element {
       >
         <TelemetryPanel />
       </div>
+
+      {/* z-[25]: über Radar und Telemetrie (z-20), unter Scrim und Menü (z-30/z-40). */}
+      <InstallHint />
 
       <SatelliteDrawer />
     </div>
