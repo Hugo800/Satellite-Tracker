@@ -1,10 +1,170 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <rect width="512" height="512" fill="#03060f" />
-  <g transform="translate(256 256) scale(0.62) translate(-256 -256)">
-    <circle cx="256" cy="256" r="230" fill="#0b1f45" />
-    <g fill="none" stroke="#38bdf8" stroke-width="14" opacity="0.9">
-      <ellipse cx="256" cy="256" rx="190" ry="68" transform="rotate(-24 256 256)" />
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1024 1024" width="1024" height="1024" xmlns:c2pa="http://c2pa.org/manifest"><metadata><c2pa:manifest>AAAWgmp1bWIAAAAeanVtZGMycGEAEQAQgAAAqgA4m3EDYzJwYQAAABZcanVtYgAAAEdqdW1kYzJtYQARABCAAACqADibcQN1cm46YzJwYTpmNDUwMTI2Zi0zNWIyLTQ4MDYtYmUzNS01OWNiNDAyNmM5MGUAAAADl2p1bWIAAAApanVtZGMyYXMAEQAQgAAAqgA4m3EDYzJwYS5hc3NlcnRpb25zAAAAALxqdW1iAAAARGp1bWRjYm9yABEAEIAAAKoAOJtxE2MycGEuaW5ncmVkaWVudC52MwAAAAAYYzJzaCFFs+LibIL9DZccMyTiL2cAAABwY2JvcqNpZGM6Zm9ybWF0bWltYWdlL3N2Zyt4bWxqaW5zdGFuY2VJRHgseG1wOmlpZDpjZGRmZmM4Ny05NTBhLTQ5YTgtOWEwOS0wODZkNDkzM2VmMjdscmVsYXRpb25zaGlwaHBhcmVudE9mAAAB4mp1bWIAAABBanVtZGNib3IAEQAQgAAAqgA4m3ETYzJwYS5hY3Rpb25zLnYyAAAAABhjMnNox/1eVrDWABQfaXxYE/4GggAAAZljYm9yomdhY3Rpb25zgqJmYWN0aW9ua2MycGEub3BlbmVkanBhcmFtZXRlcnOha2luZ3JlZGllbnRzgaJjdXJseC1zZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmluZ3JlZGllbnQudjNkaGFzaFggvKjoLJQN5AX8IHEWUYnPv+LqHBwuW7+oZGcPLHWrO56kZmFjdGlvbngdY29tLmFudGhyb3BpYy5jbGF1ZGUucHJvdmlkZWRqcGFyYW1ldGVyc6F4H2NvbS5hbnRocm9waWMub3JpZ2luLWNvbmZpZGVuY2VndW5rbm93bmtkZXNjcmlwdGlvbnhmQ2xhdWRlIHByb3ZpZGVkIHRoaXMgZmlsZSBhdCB0aGUgcmVxdWVzdCBvZiBhIHVzZXIgYW5kIG1heSBoYXZlIGNyZWF0ZWQgb3IgbW9kaWZpZWQgdGhlIGZpbGUgY29udGVudHMubXNvZnR3YXJlQWdlbnShZG5hbWVmQ2xhdWRlcmFsbEFjdGlvbnNJbmNsdWRlZPUAAADIanVtYgAAAEBqdW1kY2JvcgARABCAAACqADibcRNjMnBhLmhhc2guZGF0YQAAAAAYYzJzaKzoNeYzRcbcbLCsYHlnp6cAAACAY2JvcqVjYWxnZnNoYTI1NmNwYWRNAAAAAAAAAAAAAAAAAGRoYXNoWCAN1fFqRA2mK0aVXWkLijsADvYVCJ1r9NzQtsW2yo4M3mRuYW1lbmp1bWJmIG1hbmlmZXN0amV4Y2x1c2lvbnOBomVzdGFydBjFZmxlbmd0aBkeBAAAAj5qdW1iAAAAJ2p1bWRjMmNsABEAEIAAAKoAOJtxA2MycGEuY2xhaW0udjIAAAACD2Nib3KlY2FsZ2ZzaGEyNTZpc2lnbmF0dXJleE1zZWxmI2p1bWJmPS9jMnBhL3VybjpjMnBhOmY0NTAxMjZmLTM1YjItNDgwNi1iZTM1LTU5Y2I0MDI2YzkwZS9jMnBhLnNpZ25hdHVyZWppbnN0YW5jZUlEeCx4bXA6aWlkOjFjZTNiNDA4LWU2NWQtNGM2YS1iMTFhLTYwOWYyMWM4YzVlMnJjcmVhdGVkX2Fzc2VydGlvbnODomN1cmx4LXNlbGYjanVtYmY9YzJwYS5hc3NlcnRpb25zL2MycGEuaW5ncmVkaWVudC52M2RoYXNoWCC8qOgslA3kBfwgcRZRic+/4uocHC5bv6hkZw8sdas7nqJjdXJseCpzZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmFjdGlvbnMudjJkaGFzaFggZAnfbf3AAmf5WZ4byMBsViG8GHuptte6qsvAzuhdqpuiY3VybHgpc2VsZiNqdW1iZj1jMnBhLmFzc2VydGlvbnMvYzJwYS5oYXNoLmRhdGFkaGFzaFggLni5q7vUK8VumKUBx5QEgajapjBMXJC2agAs3P/IYYh0Y2xhaW1fZ2VuZXJhdG9yX2luZm+jZG5hbWVvQW50aHJvcGljIEZpbGVzZ3ZlcnNpb25lMS4wLjBrc3BlY1ZlcnNpb25lMi40LjAAABA4anVtYgAAAChqdW1kYzJjcwARABCAAACqADibcQNjMnBhLnNpZ25hdHVyZQAAABAIY2JvctKEWQISogEmGCFZAgowggIGMIIBjaADAgECAhRA5aAK7sI50L64g/oGQgU9Z1UTADAKBggqhkjOPQQDAzBJMRcwFQYDVQQKEw5BbnRocm9waWMsIFBCQzEuMCwGA1UEAxMlQW50aHJvcGljIENvbnRlbnQgQ3JlZGVudGlhbHMgUm9vdCBDQTAeFw0yNjA4MDcxODQzNTZaFw0yODA4MDYxOTQzNTZaMEQxFzAVBgNVBAoTDkFudGhyb3BpYywgUEJDMSkwJwYDVQQDEyBBbnRocm9waWMgQ2xhdWRlIENvbnRlbnQgU2lnbmluZzBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABJh6CmvLUBgFFNU0vUKlOVtE6djd17L5SuwX0LemFisBM3dkd/3cyjxFA3Qo5S46fX0/ihY0VZ7mfb9KF703t5OjWDBWMA4GA1UdDwEB/wQEAwIHgDAVBgNVHSUEDjAMBgorBgEEAYPoXgIBMAwGA1UdEwEB/wQCMAAwHwYDVR0jBBgwFoAUzlHiBIFOZFsj+OPEz5o+nMHXXMIwCgYIKoZIzj0EAwMDZwAwZAIwMXMdFJ4BetLLVY7ORuE9noqbbAZOZn/aArXyTwFAZfKrPzxF2vPoJNf1+UCdg1XGAjBwX1zd9WGqYkqmL5SFqw1QySjr1zJfpJM9+1rdDwSPLMOPOjKuiXjoU/pUUeG9RwmhY3BhZFkNngAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPZYQIyGFUCPFil1xyYXW3IVNjxY4kWNzWDOadnebfecMc3anrXnSNX5YpXZ72IvYXbAB4iFj/GNOIKVddI/yw49UDk=</c2pa:manifest></metadata>
+  <defs>
+    <!-- Hintergrund -->
+    <linearGradient id="bg" x1="0" y1="0" x2="0.25" y2="1">
+      <stop offset="0" stop-color="#3B86FF"/>
+      <stop offset="0.55" stop-color="#1748D6"/>
+      <stop offset="1" stop-color="#0A2490"/>
+    </linearGradient>
+    <radialGradient id="bgSheen" cx="512" cy="-120" r="820" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="blurXL" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="90"/></filter>
+    <filter id="blurL" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="22"/></filter>
+    <filter id="blurM" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="10"/></filter>
+    <filter id="blurS" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3"/></filter>
+
+    <radialGradient id="blobCyan"><stop offset="0" stop-color="#22D3EE" stop-opacity="0.5"/><stop offset="1" stop-color="#22D3EE" stop-opacity="0"/></radialGradient>
+    <radialGradient id="blobViolet"><stop offset="0" stop-color="#A855F7" stop-opacity="0.45"/><stop offset="1" stop-color="#A855F7" stop-opacity="0"/></radialGradient>
+    <!-- Planet: getöntes Glas -->
+    <linearGradient id="sphereFill" x1="0" y1="320" x2="0" y2="720" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.92"/>
+      <stop offset="0.55" stop-color="#cdeaff" stop-opacity="0.78"/>
+      <stop offset="1" stop-color="#7fd6ff" stop-opacity="0.72"/>
+    </linearGradient>
+    <radialGradient id="sphereGlow" cx="540" cy="700" r="230" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7ff7ff" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#7ff7ff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rimTL" x1="312" y1="320" x2="712" y2="720" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="0.38" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.72" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.85"/>
+    </linearGradient>
+    <radialGradient id="spec" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="sphereClip"><circle cx="512" cy="520" r="200"/></clipPath>
+
+    <!-- Ring: farbiges Glas -->
+    <linearGradient id="ringFill" x1="-390" y1="0" x2="390" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5CF2D0" stop-opacity="0.9"/>
+      <stop offset="0.5" stop-color="#8FD3FF" stop-opacity="0.82"/>
+      <stop offset="1" stop-color="#C69BFF" stop-opacity="0.9"/>
+    </linearGradient>
+    <linearGradient id="edgeTop" x1="0" y1="-150" x2="0" y2="150" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="0.6" stop-color="#ffffff" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.6"/>
+    </linearGradient>
+
+    <!-- Satellit: oranges Glas -->
+    <radialGradient id="satFill" cx="0.35" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#FFE08A"/>
+      <stop offset="0.55" stop-color="#FFA43A"/>
+      <stop offset="1" stop-color="#FF5E3A"/>
+    </radialGradient>
+    <linearGradient id="satRim" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#fff3c4" stop-opacity="0.9"/>
+    </linearGradient>
+    <linearGradient id="panelFill" x1="0" y1="-30" x2="0" y2="30" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#9fd8ff" stop-opacity="0.85"/>
+    </linearGradient>
+    <linearGradient id="bodyFill" x1="0" y1="-34" x2="0" y2="34" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFD66B"/>
+      <stop offset="0.55" stop-color="#FF9F2E"/>
+      <stop offset="1" stop-color="#FF5E3A"/>
+    </linearGradient>
+
+    <g id="satShape">
+      <rect x="-96" y="-30" width="64" height="60" rx="12"/>
+      <rect x="32" y="-30" width="64" height="60" rx="12"/>
+      <rect x="-40" y="-6" width="80" height="12" rx="6"/>
+      <rect x="-28" y="-34" width="56" height="68" rx="16"/>
     </g>
-    <circle cx="256" cy="256" r="60" fill="#38bdf8" />
+    <!-- Ring als wiederverwendbare Gruppe (im gedrehten Koordinatensystem) -->
+    <g id="ring">
+      <ellipse rx="372" ry="124" fill="none" stroke="url(#ringFill)" stroke-width="42"/>
+      <!-- Lichtkante außen oben, innen unten -->
+      <ellipse rx="390" ry="142" fill="none" stroke="url(#edgeTop)" stroke-width="4"/>
+      <ellipse rx="354" ry="106" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="3"/>
+      <!-- Glanzlauf auf der Oberseite -->
+      <path d="M -300 -78 A 372 124 0 0 1 120 -118" fill="none" stroke="#ffffff" stroke-opacity="0.75" stroke-width="7" stroke-linecap="round" filter="url(#blurS)"/>
+    </g>
+
+    <clipPath id="frontClip">
+      <rect x="-460" y="0" width="920" height="200" transform="translate(512 520) rotate(-22)"/>
+    </clipPath>
+    <mask id="sphereGap" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="#fff"/>
+      <g transform="translate(512 520) rotate(-22)">
+        <path d="M -372 0 A 372 124 0 0 0 372 0" fill="none" stroke="#000" stroke-width="86"/>
+      </g>
+    </mask>
+    <mask id="ringGap" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="#fff"/>
+      <use href="#satShape" xlink:href="#satShape" fill="#000" stroke="#000" stroke-width="34" stroke-linejoin="round" transform="translate(512 520) rotate(-22) translate(302 -72) rotate(-18) scale(1.2)"/>
+    </mask>
+  </defs>
+
+  <!-- Hintergrund mit Farbflächen, die durch das Glas schimmern -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <circle cx="180" cy="880" r="520" fill="url(#blobCyan)"/>
+  <circle cx="920" cy="230" r="480" fill="url(#blobViolet)"/>
+  <rect width="1024" height="1024" fill="url(#bgSheen)"/>
+
+  <g transform="translate(512 520) scale(0.82) translate(-512 -520)">
+<!-- Schatten -->
+  <g opacity="0.4" filter="url(#blurL)" transform="translate(0 22)">
+    <circle cx="512" cy="520" r="198" fill="#001a70"/>
+    <g transform="translate(512 520) rotate(-22)" fill="none" stroke="#001a70">
+      <ellipse rx="372" ry="124" stroke-width="40"/>
+      
+    </g>
   </g>
+
+  <use href="#satShape" xlink:href="#satShape" fill="#001a70" opacity="0.4" filter="url(#blurL)" transform="translate(0 22) translate(512 520) rotate(-22) translate(302 -72) rotate(-18) scale(1.2)"/>
+
+  <!-- Ring hinten -->
+  <g mask="url(#ringGap)">
+    <use href="#ring" xlink:href="#ring" transform="translate(512 520) rotate(-22)"/>
+  </g>
+
+  <!-- Planet -->
+  <g mask="url(#sphereGap)">
+    <circle cx="512" cy="520" r="200" fill="url(#sphereFill)"/>
+    <g clip-path="url(#sphereClip)">
+      <circle cx="540" cy="700" r="230" fill="url(#sphereGlow)"/>
+      <!-- innere Tiefe -->
+      <circle cx="560" cy="580" r="250" fill="none" stroke="#2a6fe0" stroke-opacity="0.35" stroke-width="70" filter="url(#blurL)"/>
+      <!-- farbiger Lichtreflex unten -->
+      <path d="M 360 640 A 200 200 0 0 0 664 640" fill="none" stroke="#5CF2D0" stroke-opacity="0.9" stroke-width="10" filter="url(#blurM)"/>
+    </g>
+    <circle cx="512" cy="520" r="197" fill="none" stroke="url(#rimTL)" stroke-width="6"/>
+    <ellipse cx="438" cy="418" rx="96" ry="44" transform="rotate(-38 438 418)" fill="url(#spec)" opacity="0.9"/>
+  </g>
+
+  <!-- Ring vorne -->
+  <g clip-path="url(#frontClip)">
+    <use href="#ring" xlink:href="#ring" transform="translate(512 520) rotate(-22)"/>
+  </g>
+
+  <!-- Satellit -->
+  <g transform="translate(512 520) rotate(-22) translate(302 -72) rotate(-18) scale(1.2)">
+    <circle r="70" fill="#FF8A3D" opacity="0.4" filter="url(#blurL)"/>
+    <!-- Verbindung -->
+    <rect x="-40" y="-6" width="80" height="12" rx="6" fill="#ffffff" opacity="0.9"/>
+    <!-- Solarpaneele -->
+    <g>
+      <rect x="-96" y="-30" width="64" height="60" rx="12" fill="url(#panelFill)"/>
+      <rect x="32" y="-30" width="64" height="60" rx="12" fill="url(#panelFill)"/>
+      <g stroke="#3B86FF" stroke-opacity="0.45" stroke-width="3">
+        <line x1="-64" y1="-26" x2="-64" y2="26"/><line x1="-92" y1="0" x2="-36" y2="0"/>
+        <line x1="64" y1="-26" x2="64" y2="26"/><line x1="36" y1="0" x2="92" y2="0"/>
+      </g>
+      <rect x="-94.5" y="-28.5" width="61" height="57" rx="11" fill="none" stroke="#ffffff" stroke-width="3" stroke-opacity="0.95"/>
+      <rect x="33.5" y="-28.5" width="61" height="57" rx="11" fill="none" stroke="#ffffff" stroke-width="3" stroke-opacity="0.95"/>
+    </g>
+    <!-- Körper -->
+    <rect x="-28" y="-34" width="56" height="68" rx="16" fill="url(#bodyFill)"/>
+    <rect x="-26.5" y="-32.5" width="53" height="65" rx="14.5" fill="none" stroke="url(#satRim)" stroke-width="3"/>
+    <ellipse cx="-8" cy="-20" rx="13" ry="7" transform="rotate(-20 -8 -20)" fill="#ffffff" opacity="0.85" filter="url(#blurS)"/>
+  </g>
+</g>
 </svg>

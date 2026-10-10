@@ -11,7 +11,7 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['icons/icon.svg', 'icons/maskable.svg'],
+      includeAssets: ['icons/icon.svg', 'icons/maskable.svg', 'icons/apple-touch-icon.png'],
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
@@ -37,6 +37,9 @@ export default defineConfig({
         icons: [
           { src: './icons/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
           { src: './icons/maskable.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' },
+          { src: './icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: './icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: './icons/maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
       devOptions: { enabled: false },
