@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { registerSW } from 'virtual:pwa-register';
 import App from './App';
 import { startInstallPromptCapture } from './utils/installHint';
+import { startSkyBleed } from './utils/skyBleed';
 import { watchViewportShortfall } from './utils/viewportShortfallWatch';
 import './index.css';
 
@@ -21,6 +22,10 @@ if (!container) throw new Error('Root-Element nicht gefunden');
 // müsste sie ungeprüft doppeln; vor dem ersten Rendern ist ohnehin nur die
 // schwarze Grundfläche zu sehen.
 watchViewportShortfall();
+
+// Vor dem ersten Rendern, damit das HUD seine Lage gleich in der
+// Parkposition misst (src/utils/skyBleed.ts).
+startSkyBleed();
 
 // Aus demselben Grund vor dem ersten Rendern: `beforeinstallprompt` kann vor
 // dem ersten Commit kommen und kommt dann nicht wieder (src/utils/installHint.ts).

@@ -222,7 +222,8 @@
  *
  * Scrollen soll die Seite ohnehin nirgends (siehe `overscroll-behavior`
  * unten, Drawer und Listen scrollen jeweils in sich selbst), deshalb ist
- * `overflow: hidden` hier unbedenklich.
+ * `overflow: hidden` hier unbedenklich. Einzige Ausnahme ist der Safari-Tab
+ * auf iOS, siehe `html.sky-bleed` unten.
  */
 html,
 body,
@@ -269,6 +270,50 @@ body {
  */
 .sky-canvas canvas {
   touch-action: none !important;
+}
+
+/*
+ * Safari-Tab auf iOS: Seite im Fluss und auf Scrollposition `--bleed-top`
+ * geparkt, der Himmel ragt oben und unten unter Safaris Leisten (Herleitung
+ * in src/utils/skyBleed.ts). #root deckt genau den sichtbaren Bereich ab,
+ * die Bedienoberfläche bleibt also, wo sie war. `!important` am Himmel, weil
+ * react-three-fiber Lage und Höhe seines Containers als Inline-Stil setzt.
+ */
+html.sky-bleed,
+html.sky-bleed body {
+  position: static;
+  height: auto;
+  overflow: visible;
+}
+
+html.sky-bleed {
+  overscroll-behavior: none;
+  scrollbar-width: none;
+}
+
+html.sky-bleed body {
+  padding: var(--bleed-top) 0 var(--bleed-bottom);
+}
+
+html.sky-bleed #root {
+  position: relative;
+  inset: auto;
+  height: 100dvh;
+  overflow: visible;
+}
+
+/* Senkrecht frei für den Himmel, waagerecht abgeschnitten für das
+   eingefahrene Blatt (SatelliteDrawer, rechts neben dem Bild). */
+html.sky-bleed #root > div {
+  overflow-x: clip;
+  overflow-y: visible;
+}
+
+html.sky-bleed .sky-canvas {
+  position: absolute !important;
+  top: calc(-1 * var(--bleed-top));
+  bottom: calc(-1 * var(--bleed-bottom));
+  height: auto !important;
 }
 
 /* -------------------------------------------------------------------- */

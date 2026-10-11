@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { AdaptiveDpr, Preload } from '@react-three/drei';
+import { BleedView } from './BleedView';
 import { CameraRig } from './CameraRig';
 import { CelestialBodies } from './CelestialBodies';
 import { HighlightMarkers } from './HighlightMarkers';
@@ -73,6 +74,7 @@ export function SkyScene(): React.JSX.Element {
       <OrbitTrail />
       <VisibilityForecast />
       <CameraRig />
+      <BleedView />
       <TapPicker />
       <AdaptiveDpr pixelated />
       <Preload all />

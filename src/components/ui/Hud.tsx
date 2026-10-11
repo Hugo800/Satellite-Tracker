@@ -47,9 +47,12 @@ export function Hud(): React.JSX.Element {
     if (!el) return;
 
     const measure = () => {
-      // getBoundingClientRect().bottom ist bereits der Abstand vom oberen
-      // Fensterrand in CSS-Pixeln – genau das, was `top` unten braucht.
-      setHudTopFree(el.getBoundingClientRect().bottom);
+      // Abstand der TopBar-Unterkante von der Oberkante des HUD-Containers in
+      // CSS-Pixeln – genau das, was `top` unten braucht. Relativ zum
+      // Container statt zum Fenster, weil die Seite im Safari-Tab gescrollt
+      // steht und kurz verrutschen kann (src/utils/skyBleed.ts).
+      const origin = el.offsetParent?.getBoundingClientRect().top ?? 0;
+      setHudTopFree(el.getBoundingClientRect().bottom - origin);
     };
 
     measure();

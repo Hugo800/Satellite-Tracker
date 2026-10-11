@@ -178,20 +178,25 @@ export function SatelliteDrawer(): React.JSX.Element {
     [select, setDrawerOpen],
   );
 
+  // Schleier und Blatt `absolute` statt `fixed`: Der HUD-Container deckt
+  // denselben Bereich ab, aber Safari (iOS 26+) übernimmt ein fixiertes
+  // Element an der Bildschirmkante deckend in Statusleiste und Toolbar und
+  // misst oben nach der ersten Berührung nicht mehr nach – nach einmal
+  // Öffnen blieb die Statusleiste schwarz (src/utils/skyBleed.ts).
   return (
     <>
       {drawerOpen && (
         <button
           type="button"
           aria-label="Menü schließen"
-          className="pointer-events-auto fixed inset-0 z-30 transition-opacity"
+          className="pointer-events-auto absolute inset-0 z-30 transition-opacity"
           style={{ background: 'var(--scrim)', transitionDuration: 'var(--t-base)' }}
           onClick={() => setDrawerOpen(false)}
         />
       )}
 
       <aside
-        className="material-strong pointer-events-auto fixed inset-y-0 right-0 z-40 flex w-[min(88vw,24rem)] flex-col border-y-0 border-r-0"
+        className="material-strong pointer-events-auto absolute inset-y-0 right-0 z-40 flex w-[min(88vw,24rem)] flex-col border-y-0 border-r-0"
         style={{
           paddingTop: 'var(--safe-top)',
           paddingBottom: 'var(--safe-bottom)',
